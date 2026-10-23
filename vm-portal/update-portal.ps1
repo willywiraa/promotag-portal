@@ -1,11 +1,12 @@
 <#
-  Updates the Promo Tag Portal on this VM from GitHub, then restarts it. Double-click update-portal.cmd.
+  Brings the Promo Tag Portal on this VM up to date from GitHub and makes sure it is running.
+  Double-click update-portal.cmd.
 
-    1. Checks GitHub for new commits. Without any, nothing else happens.
-    2. Stops the portal, but never while a run is in progress.
-    3. Pulls the new commits.
-    4. Reinstalls the libraries when package-lock.json changed.
-    5. Starts the portal again (the "Promo Tag Portal" scheduled task, or start-portal.cmd).
+    1. Checks GitHub for new commits.
+    2. With new commits: stops the portal (never while a run is in progress) and pulls them.
+       Without: if the portal is running, nothing else happens.
+    3. Installs the libraries when package-lock.json changed or they are missing.
+    4. Starts the portal (the "Promo Tag Portal" scheduled task, or start-portal.cmd).
 
   vm-portal\data (settings, logins, History, the Edge profile) is not in Git and is never touched.
 #>
@@ -31,6 +32,17 @@ function Invoke-Git {
     try { return @(& git -C $repo @args 2>&1 | ForEach-Object { "$_" }) } finally { $ErrorActionPreference = $previous }
 }
 
+function Test-PortalUp {
+    if (-not (Test-Path $stateFile)) { return $false }
+    $state = Get-Content $stateFile -Raw | ConvertFrom-Json
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$($state.port)/" -TimeoutSec 5 | Out-Null
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function Start-Portal {
     if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
         Start-ScheduledTask -TaskName $taskName
@@ -43,7 +55,7 @@ function Stop-Portal {
     if (-not (Test-Path $stateFile)) { return }
     $state = Get-Content $stateFile -Raw | ConvertFrom-Json
     try {
-        Invoke-RestMethod -Method Post -Uri "http://localhost:$($state.port)/api/admin/stop" `
+        Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$($state.port)/api/admin/stop" `
             -Headers @{ 'X-PTAE-Stop-Token' = $state.token } -TimeoutSec 15 | Out-Null
     } catch {
         $status = 0
@@ -85,31 +97,34 @@ if ($LASTEXITCODE) {
 }
 $branch = (& git -C $repo rev-parse --abbrev-ref HEAD).Trim()
 $behind = [int](& git -C $repo rev-list --count "HEAD..origin/$branch")
-if ($behind -eq 0) {
-    Say 'Already up to date. The portal keeps running.' 'Green'
+$librariesChanged = $false
+if ($behind -gt 0) {
+    $edited = & git -C $repo status --porcelain --untracked-files=no
+    if ($edited) {
+        Fail ("These files were changed on this VM; the update would overwrite them:`n$($edited -join "`n")`n" +
+            "Undo the changes with: git -C `"$repo`" checkout -- .`nThen run the update again.")
+    }
+    Say "$behind new change(s):"
+    & git -C $repo log --oneline "HEAD..origin/$branch" | ForEach-Object { Say "  $_" }
+    $librariesChanged = [bool](& git -C $repo diff --name-only HEAD "origin/$branch" -- vm-portal/package-lock.json)
+
+    # 2. Stop the portal, then pull
+    Say 'Stopping the portal...'
+    Stop-Portal
+    & git -C $repo merge --ff-only --quiet "origin/$branch"
+    if ($LASTEXITCODE) {
+        Start-Portal
+        Fail 'The update could not be applied (see above). The portal was started again with the previous version.'
+    }
+} elseif (Test-PortalUp) {
+    Say 'Already up to date. The portal is running.' 'Green'
     exit 0
-}
-$edited = & git -C $repo status --porcelain --untracked-files=no
-if ($edited) {
-    Fail ("These files were changed on this VM; the update would overwrite them:`n$($edited -join "`n")`n" +
-        "Undo the changes with: git -C `"$repo`" checkout -- .`nThen run the update again.")
-}
-Say "$behind new change(s):"
-& git -C $repo log --oneline "HEAD..origin/$branch" | ForEach-Object { Say "  $_" }
-$librariesChanged = [bool](& git -C $repo diff --name-only HEAD "origin/$branch" -- vm-portal/package-lock.json)
-
-# 2. Stop the portal
-Say 'Stopping the portal...'
-Stop-Portal
-
-# 3. Pull
-& git -C $repo merge --ff-only --quiet "origin/$branch"
-if ($LASTEXITCODE) {
-    Start-Portal
-    Fail 'The update could not be applied (see above). The portal was started again with the previous version.'
+} else {
+    Say 'Already up to date, but the portal is not running.' 'Yellow'
+    Stop-Portal # clears what a portal that crashed may have left behind
 }
 
-# 4. Libraries
+# 3. Libraries
 if ($librariesChanged -or -not (Test-Path (Join-Path $vmDir 'node_modules'))) {
     Say 'Installing libraries (npm ci)...'
     Push-Location $vmDir
@@ -119,21 +134,16 @@ if ($librariesChanged -or -not (Test-Path (Join-Path $vmDir 'node_modules'))) {
     if ($npmFailed) { Fail 'npm ci failed (see above). Copy vm-portal\node_modules from your laptop, then start the portal.' }
 }
 
-# 5. Start the portal again
+# 4. Start the portal
 Say 'Starting the portal...'
 Start-Portal
 $deadline = (Get-Date).AddSeconds(90)
 $up = $false
 while (-not $up -and (Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 2
-    if (Test-Path $stateFile) {
-        $state = Get-Content $stateFile -Raw | ConvertFrom-Json
-        try {
-            Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:$($state.port)/" -TimeoutSec 5 | Out-Null
-            $up = $true
-        } catch { }
-    }
+    $up = Test-PortalUp
 }
 if (-not $up) { Fail 'The portal did not start. Its console window shows the error.' }
 $version = (Get-Content (Join-Path $repo 'hybris-promotag-extension\manifest.json') -Raw | ConvertFrom-Json).version
-Say "Updated. The portal is running version $version." 'Green'
+$done = if ($behind -gt 0) { 'Updated' } else { 'Started' }
+Say "$done. The portal is running version $version. Open http://localhost:$((Get-Content $stateFile -Raw | ConvertFrom-Json).port)/ on this VM." 'Green'

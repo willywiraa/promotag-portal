@@ -1,10 +1,12 @@
 /*
  * Lets the extension's own popup.js and history.js run as web pages served by the VM portal:
- *  - chrome.runtime.sendMessage   -> POST /api/ui (the server runs the extension's background.js);
- *  - chrome.storage.onChanged     <- /api/events (server-sent events);
+ *  - chrome.runtime.sendMessage   -> POST api/ui (the server runs the extension's background.js);
+ *  - chrome.storage.onChanged     <- api/events (server-sent events), or polling when a proxy holds
+ *                                    the stream back;
  *  - chrome.storage.session draft -> this browser's localStorage;
- *  - the history database         -> /api/history and /api/shots;
+ *  - the history database         -> api/history and api/shots;
  *  - "Open in Promo Tag Portal"   -> tags read from this page's own URL (…/#promotags=…).
+ * All URLs are relative, so the portal also works behind IIS at a sub-path such as /promotag/.
  * Load after the page's shared scripts and before popup.js / history.js.
  */
 (function () {
@@ -31,7 +33,13 @@
   }
 
   // --- live updates ------------------------------------------------------------------------------
+  const POLL_AFTER_MS = 5000;
+  const POLL_EVERY_MS = 3000;
   let stream = null;
+  let streaming = false; // a ping or message arrived: the stream gets through
+  let poller = null;
+  let lastState = '';
+
   function emit(changes, area) {
     listeners.forEach((fn) => {
       try {
@@ -42,31 +50,57 @@
     });
   }
 
+  /** Reports the run state as changes, like the stream would, when it differs from the last report. */
+  async function catchUp() {
+    const s = await post('api/ui', { type: 'UI_STATE' });
+    if (!s || !s.ok) return;
+    const last = s.logs.length ? s.logs[s.logs.length - 1].t : 0;
+    const key = JSON.stringify([s.job, s.batch, s.logs.length, last]);
+    if (key === lastState) return;
+    lastState = key;
+    emit({ job: { newValue: s.job }, batch: { newValue: s.batch }, logs: { newValue: s.logs } }, 'session');
+  }
+
+  function stopPolling() {
+    clearInterval(poller);
+    poller = null;
+  }
+
   function connect() {
     if (stream) return;
     let opened = false;
-    stream = new EventSource('/api/events');
+    const heard = () => {
+      streaming = true;
+      stopPolling();
+    };
+    stream = new EventSource('api/events');
+    stream.addEventListener('ping', heard);
     stream.onmessage = (e) => {
+      heard();
       const m = JSON.parse(e.data);
       emit(m.changes, m.area);
     };
-    stream.onopen = async () => {
+    stream.onopen = () => {
       if (!opened) {
         opened = true;
         return;
       }
-      // Reconnected: catch up on what changed while the connection was down.
-      const s = await post('/api/ui', { type: 'UI_STATE' });
-      if (s && s.ok) emit({ job: { newValue: s.job }, batch: { newValue: s.batch }, logs: { newValue: s.logs } }, 'session');
+      catchUp(); // reconnected: catch up on what changed while the connection was down
     };
     stream.onerror = () => {
       if (stream.readyState === EventSource.CLOSED) disconnect(); // e.g. logged out: reconnect after the next login
     };
+    // A proxy that holds the stream back delivers nothing: ask for the state every few seconds instead.
+    setTimeout(() => {
+      if (stream && !streaming && !poller) poller = setInterval(catchUp, POLL_EVERY_MS);
+    }, POLL_AFTER_MS);
   }
 
   function disconnect() {
     if (stream) stream.close();
     stream = null;
+    streaming = false;
+    stopPolling();
   }
 
   // --- "Open in Promo Tag Portal" link -----------------------------------------------------------
@@ -92,7 +126,7 @@
   // --- messages ----------------------------------------------------------------------------------
   async function sendMessage(msg) {
     if (msg.type === 'UI_OPEN_HISTORY') {
-      window.open(`/history${msg.runId ? `#run=${encodeURIComponent(msg.runId)}` : ''}`, '_blank');
+      window.open(`history${msg.runId ? `#run=${encodeURIComponent(msg.runId)}` : ''}`, '_blank');
       return { ok: true };
     }
     if (msg.type === 'UI_IMPORT_TAKE') {
@@ -100,7 +134,7 @@
       sessionStorage.removeItem(IMPORT_KEY);
       return { ok: true, import: pending };
     }
-    const resp = await post('/api/ui', msg);
+    const resp = await post('api/ui', msg);
     if (msg.type === 'UI_STATE' && resp.ok) resp.pendingImport = pendingImport();
     if ((msg.type === 'UI_STATE' && resp.ok && resp.auth.loggedIn) || (/^UI_(LOGIN|SETUP)$/.test(msg.type) && resp.ok)) connect();
     if (msg.type === 'UI_LOGOUT' || resp.code === 'AUTH') disconnect();
@@ -109,7 +143,7 @@
 
   /** The History page checks the portal login through chrome.storage.local "portalSession". */
   async function visitorSession() {
-    const s = await post('/api/ui', { type: 'UI_STATE' });
+    const s = await post('api/ui', { type: 'UI_STATE' });
     if (!s || !s.ok || !s.auth.loggedIn) return null;
     connect();
     return { token: 'portal-session-held-in-a-cookie', userId: s.auth.userId, expiresAt: s.auth.expiresAt };
@@ -159,7 +193,7 @@
   // --- History page: the database lives on the VM --------------------------------------------------
   if (P.historyDb) {
     const call = async (method, ...args) => {
-      const r = await post('/api/history', { method, args });
+      const r = await post('api/history', { method, args });
       if (!r.ok) throw new Error(r.error || 'History not available.');
       return r.result;
     };
@@ -178,7 +212,7 @@
       async getScreenshotsForRun(id) {
         const shots = await call('getScreenshotsForRun', id);
         return Promise.all(shots.map(async (s) => {
-          const res = await fetch(`/api/shots/${encodeURIComponent(s.id)}`, { credentials: 'same-origin' });
+          const res = await fetch(`api/shots/${encodeURIComponent(s.id)}`, { credentials: 'same-origin' });
           return Object.assign(s, { blob: await res.blob() });
         }));
       },

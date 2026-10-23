@@ -3,7 +3,8 @@
  * (dev/tests/fixtures) served over HTTP, the portal server in headless mode, and a second headless
  * Edge acting as the user. The user opens a Teams "Open in Promo Tag Portal" link, creates the first
  * login, sets the Backoffice URL, executes, confirms, then checks History and logs out. Then the
- * portal is stopped the way update-portal.ps1 does it, restarted, and a colleague from users.json logs in.
+ * portal is stopped the way update-portal.ps1 does it, restarted, and a colleague from users.json logs in
+ * and runs a tag through a stand-in for IIS at /promotag/ that holds back the live-update stream.
  *
  * Run: npm test
  */
@@ -49,6 +50,41 @@ async function startMockBackoffice() {
 <script src="/fixtures/mock-backoffice.js"></script>
 <script>MockBackoffice.reset({ page: 'shell', records: ${JSON.stringify(RECORDS)} });</script>
 </body></html>`);
+  });
+  return { server, port: await listen(server) };
+}
+
+/**
+ * Stand-in for IIS at /promotag/: strips the prefix, adds X-Forwarded-For (with the client's port, as
+ * IIS does) and holds back the live-update stream completely, like IIS with response buffering.
+ * Header x-test-client sets the visitor's address (default: a colleague's PC).
+ */
+async function startProxy(portalPort) {
+  const server = http.createServer((req, res) => {
+    if (req.url === '/promotag') {
+      res.writeHead(302, { Location: '/promotag/' });
+      return res.end();
+    }
+    if (!req.url.startsWith('/promotag/')) {
+      res.writeHead(404);
+      return res.end();
+    }
+    const client = req.headers['x-test-client'] || '10.0.0.5:51234';
+    const headers = Object.assign({}, req.headers, {
+      'x-forwarded-for': req.headers['x-forwarded-for'] ? `${req.headers['x-forwarded-for']}, ${client}` : client,
+    });
+    delete headers['x-test-client'];
+    const up = http.request({ host: '127.0.0.1', port: portalPort, method: req.method, path: req.url.slice('/promotag'.length), headers }, (r) => {
+      if (req.url.startsWith('/promotag/api/events')) return; // held back: nothing reaches the browser
+      res.writeHead(r.statusCode, r.headers);
+      r.pipe(res);
+    });
+    up.on('error', () => {
+      if (!res.headersSent) res.writeHead(502);
+      res.end();
+    });
+    res.on('close', () => up.destroy()); // the browser went away (or the response is complete)
+    req.pipe(up);
   });
   return { server, port: await listen(server) };
 }
@@ -125,7 +161,7 @@ async function main() {
       if (!lan) return; // no network adapter: nothing to test
       const res = await fetch(`http://${lan.address}:${port}/api/ui`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '127.0.0.1' }, // a faked header must not help
         body: JSON.stringify({ type: 'UI_SETUP', userId: 'intruder', password: 'whatever-123' }),
       });
       const body = await res.json();
@@ -235,6 +271,55 @@ async function main() {
       }).then((r) => r.json()));
       assert.strictEqual(counts.result.runs, 2, 'History kept across restarts');
       await other.close();
+    });
+
+    await step('behind a proxy at /promotag/ (like IIS) that holds back live updates: everything still works', async () => {
+      const proxyServer = await startProxy(port);
+      const proxy = `http://127.0.0.1:${proxyServer.port}`;
+      try {
+        assert.strictEqual((await fetch(`${proxy}/promotag`, { redirect: 'manual' })).status, 302);
+        const setup = (client) => fetch(`${proxy}/promotag/api/ui`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-test-client': client },
+          body: JSON.stringify({ type: 'UI_SETUP', userId: 'x', password: 'whatever-123' }),
+        }).then((r) => r.json());
+        assert.match((await setup('10.0.0.5:51234')).error, /on the VM itself/, 'a colleague through IIS is not at the VM');
+        assert.match((await setup('[::1]:51234')).error, /already exists/, 'someone at the VM through IIS is');
+
+        const ctx = await user.newContext();
+        const p3 = await ctx.newPage();
+        await p3.goto(`${proxy}/promotag`);
+        assert.strictEqual(new URL(p3.url()).pathname, '/promotag/');
+        await p3.waitForSelector('#login-view:not([hidden])');
+        await p3.fill('#login-user', 'colleague');
+        await p3.fill('#login-pass', 'colleague-key-1');
+        await p3.click('#login-btn');
+        await p3.waitForSelector('#portal-view:not([hidden])', { timeout: 30000 });
+        await p3.fill('#rows .row-code', '895 || 10% OFF $60');
+        await p3.press('#rows .row-code', 'Tab'); // splits the line; the note it shows moves the Execute button
+        await p3.waitForSelector('#parse-note:not([hidden])');
+        await p3.click('#execute-btn');
+        // The stream is held back, so the confirm screen and the progress arrive by polling.
+        await p3.waitForSelector('#confirm-panel:not([hidden]), #job-error:not([hidden])', { timeout: 90000 });
+        const pageState = await p3.evaluate(() => ({
+          error: document.getElementById('job-error').textContent,
+          codes: [...document.querySelectorAll('#rows .row-code')].map((e) => e.value),
+          runView: !document.getElementById('run-view').hidden,
+          status: document.getElementById('status-text').textContent,
+        }));
+        assert.ok(await p3.isVisible('#confirm-panel'), `no confirm screen: ${JSON.stringify(pageState)}`);
+        assert.strictEqual(await p3.textContent('#cf-old'), '10% OFF $80');
+        await p3.click('#cf-yes');
+        await p3.waitForFunction(() => /^Finished/.test(document.getElementById('run-title').textContent), null, { timeout: 120000 });
+        assert.strictEqual(await p3.textContent('#run-title'), 'Finished — 1 verified');
+        const [history] = await Promise.all([p3.waitForEvent('popup'), p3.click('#history-btn')]);
+        await history.waitForSelector('#app:not([hidden])');
+        assert.strictEqual(new URL(history.url()).pathname, '/promotag/history');
+        await history.waitForFunction(() => document.querySelectorAll('#rows tr').length === 3);
+        await ctx.close();
+      } finally {
+        proxyServer.server.close();
+      }
     });
   } finally {
     if (user) await user.close().catch(() => {});

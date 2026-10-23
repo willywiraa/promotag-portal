@@ -6,7 +6,11 @@
  * The automation, batching, verification, history and Teams reply are the extension's code; this file
  * adds the web server: per-visitor logins (cookies), the page API, live updates and screenshots.
  *
- * Environment: PTAE_PORT (8080), PTAE_DATA_DIR (./data), PTAE_HEADLESS=1 (no Edge window; tests only).
+ * Pages use relative links, so the portal also works behind IIS at a sub-path (vm-portal/iis/web.config).
+ *
+ * Environment (start-portal.cmd reads it from data/env.cmd): PTAE_PORT (8080), PTAE_HOST (all addresses;
+ * 127.0.0.1 behind IIS), PTAE_PUBLIC_URL (the address shown for colleagues), PTAE_DATA_DIR (./data),
+ * PTAE_HEADLESS=1 (no Edge window; tests only).
  * data/users.json: extra portal logins for this VM (entries from dev/tools/credential-hasher.html).
  * data/portal.json: port, process id and stop token of the running portal, for update-portal.ps1.
  */
@@ -23,6 +27,8 @@ const { createFileHistoryDb } = require('./lib/file-history-db');
 const EXT = path.resolve(__dirname, '..', 'hybris-promotag-extension');
 const PUBLIC = path.join(__dirname, 'public');
 const PORT = Number(process.env.PTAE_PORT) || 8080;
+const HOST = process.env.PTAE_HOST || '';
+const PUBLIC_URL = process.env.PTAE_PUBLIC_URL || '';
 const DATA = path.resolve(process.env.PTAE_DATA_DIR || path.join(__dirname, 'data'));
 const HEADLESS = process.env.PTAE_HEADLESS === '1';
 const VERSION = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8')).version;
@@ -98,7 +104,26 @@ function sessionCookie(s) {
   return `ptae_sid=${encodeURIComponent(s.token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}`;
 }
 
-const isLocal = (req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+const LOOPBACK = ['127.0.0.1', '::1', '::ffff:127.0.0.1'];
+
+/** "10.1.2.3:51234" / "[::1]:51234" / "::1" -> the address alone. */
+function addressOnly(s) {
+  const v = String(s || '').trim();
+  const v6 = /^\[([^\]]+)\](?::\d+)?$/.exec(v);
+  if (v6) return v6[1];
+  return /^\d+\.\d+\.\d+\.\d+:\d+$/.test(v) ? v.replace(/:\d+$/, '') : v;
+}
+
+/**
+ * Whether the visitor sits at the VM itself. Behind IIS every request arrives from the VM, so then the
+ * visitor is the last X-Forwarded-For entry, the one IIS added. The header only counts when the request
+ * comes from the VM, so it can't be faked from another PC.
+ */
+function isLocal(req) {
+  if (!LOOPBACK.includes(req.socket.remoteAddress)) return false;
+  const forwarded = req.headers['x-forwarded-for'];
+  return !forwarded || LOOPBACK.includes(addressOnly(String(forwarded).split(',').pop()));
+}
 
 /** Portal page messages (UI_*): the visitor's login is passed to background.js for this request only. */
 async function handleUi(req, msg) {
@@ -141,21 +166,27 @@ chrome.storage.onChanged.addListener((changes, area) => {
     printed = logs.length ? logs[logs.length - 1].t : printed;
   }
 });
-setInterval(() => streams.forEach((res) => res.write(': keep-alive\n\n')), 25000).unref();
+// Pings tell the page that live updates get through; a proxy that holds the stream back (e.g. IIS with
+// response buffering) delivers none, and the page then asks for the state every few seconds instead.
+const PING = 'event: ping\ndata: {}\n\n';
+setInterval(() => streams.forEach((res) => res.write(PING)), 25000).unref();
 
 // --- pages --------------------------------------------------------------------------------------------
-/** The extension's page, with its files served from /ext/ and the web shim added before its script. */
+/**
+ * The extension's page, with its files served from ext/ and the web shim added before its script.
+ * All links are relative, so the pages also work behind IIS at a sub-path such as /promotag/.
+ */
 function extensionPage(file, script, extraScripts) {
   const dir = path.posix.dirname(file);
   let html = fs.readFileSync(path.join(EXT, file), 'utf8');
-  html = html.replace(/(src|href)="(?!https?:|\/|#|data:)([^"]+)"/g, (m, attr, rel) => `${attr}="/ext/${path.posix.normalize(`${dir}/${rel}`)}"`);
+  html = html.replace(/(src|href)="(?!https?:|\/|#|data:)([^"]+)"/g, (m, attr, rel) => `${attr}="ext/${path.posix.normalize(`${dir}/${rel}`)}"`);
   const head = `<meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="ptae-version" content="${VERSION}">
-  <link rel="icon" href="/ext/assets/icon-48.png">
-  <link rel="stylesheet" href="/vm/web.css">`;
+  <link rel="icon" href="ext/assets/icon-48.png">
+  <link rel="stylesheet" href="vm/web.css">`;
   html = html.replace('</head>', `  ${head}\n</head>`);
-  const shims = extraScripts.concat('/vm/web-shim.js').map((s) => `<script src="${s}"></script>`).join('\n  ');
-  return html.replace(`<script src="/ext/${script}"></script>`, (m) => `${shims}\n  ${m}`);
+  const shims = extraScripts.concat('vm/web-shim.js').map((s) => `<script src="${s}"></script>`).join('\n  ');
+  return html.replace(`<script src="ext/${script}"></script>`, (m) => `${shims}\n  ${m}`);
 }
 
 function send(res, status, body, headers = {}) {
@@ -207,7 +238,7 @@ async function route(req, res) {
   const p = url.pathname;
 
   if (req.method === 'GET' && (p === '/' || p === '/index.html')) {
-    const html = extensionPage('popup/popup.html', 'popup/popup.js', ['/ext/scripts/shared/teams.js']);
+    const html = extensionPage('popup/popup.html', 'popup/popup.js', ['ext/scripts/shared/teams.js']);
     return send(res, 200, html, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': PAGE_CSP, 'Cache-Control': 'no-cache' });
   }
   if (req.method === 'GET' && p === '/history') {
@@ -245,8 +276,8 @@ async function route(req, res) {
   if (!visitorSession(req)) return sendJson(res, 401, { ok: false, error: 'Portal session expired — please log in again.', code: 'AUTH' });
 
   if (req.method === 'GET' && p === '/api/events') {
-    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
-    res.write(': connected\n\n');
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store, no-transform', Connection: 'keep-alive' });
+    res.write(PING);
     streams.add(res);
     req.on('close', () => streams.delete(res));
     return undefined;
@@ -286,11 +317,14 @@ async function main() {
   } catch (err) {
     console.error(`Microsoft Edge did not start: ${err.message}\nThe portal opens anyway; Edge is retried on the next run.`);
   }
-  server.listen(PORT, () => {
+  const ready = () => {
     fs.writeFileSync(STATE_FILE, JSON.stringify({ port: PORT, pid: process.pid, token: STOP_TOKEN, started: new Date().toISOString() }));
-    console.log(`Portal: http://localhost:${PORT}/  (from other PCs: http://${os.hostname()}:${PORT}/)`);
+    const others = PUBLIC_URL || (HOST ? '' : `http://${os.hostname()}:${PORT}/`);
+    console.log(`Portal: http://localhost:${PORT}/  (${others ? `from other PCs: ${others}` : 'only from this VM'})`);
     console.log('Keep this window open. Press Ctrl+C to stop.');
-  });
+  };
+  if (HOST) server.listen(PORT, HOST, ready);
+  else server.listen(PORT, ready);
 }
 
 async function shutdown(code = 0) {

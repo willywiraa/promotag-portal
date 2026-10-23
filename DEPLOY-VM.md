@@ -1,7 +1,7 @@
 # Run the Promo Tag Portal on a Windows VM
 
 The portal runs on the VM instead of in your browser. You and your colleagues open it from any PC on
-the company network at `http://<vm-name>:8080/`, and the **Open in Promo Tag Portal** button on the
+the company network at `http://<vm-name>/promotag/` (through IIS, step 10), and the **Open in Promo Tag Portal** button on the
 Daily Alert opens it with the tags already filled in. When you click **Execute**, the VM updates
 Backoffice in its own Edge window, then replies in Teams. The pages, steps, confirm screen, History
 and Teams reply are the same as the extension's.
@@ -15,7 +15,7 @@ itself with one double-click (see [Updating](#updating)).
   reach github.com.
 - A VM account that can stay signed in. The portal runs in that account's session.
 - A GitHub account.
-- Only if colleagues use it from their PCs: IT opens port 8080 on the VM (step 10).
+- For colleagues' PCs: IIS on the VM with Application Request Routing (step 10), or IT opens port 8080.
 
 ## 1. Put the project on GitHub (laptop, once)
 
@@ -71,7 +71,8 @@ settings, logins, History and Backoffice sign-in.
 
 ## 4. Start the portal
 
-Double-click `C:\PromoTagPortal\vm-portal\start-portal.cmd`. Two windows open:
+Double-click `C:\PromoTagPortal\vm-portal\start-portal.cmd` (`update-portal.cmd` also starts the
+portal when it isn't running). Two windows open:
 
 - a console window, which shows `Portal: http://localhost:8080/` and logs every run;
 - an Edge window showing **Promo Tag Portal is running**. The portal drives Backoffice in this window.
@@ -102,10 +103,11 @@ window on the VM within 3 minutes, or sign in and then run again.
 
 ## 8. Test it from your laptop
 
-Open `http://<vm-name>:8080/`, log in, enter one tag and click **Execute**. Confirm the change, then
-check the reply under the Daily Alert. The console window on the VM shows each step.
+Open the portal (`http://<vm-name>/promotag/` once IIS is set up in step 10, otherwise
+`http://<vm-name>:8080/`), log in, enter one tag and click **Execute**. Confirm the change, then check
+the reply under the Daily Alert. The console window on the VM shows each step.
 
-To find `<vm-name>`, look at the console window: it shows `from other PCs: http://<vm-name>:8080/`.
+The console window shows the address for other PCs after `from other PCs:`.
 
 ## 9. Start it automatically
 
@@ -122,23 +124,57 @@ The portal now starts whenever you sign in to the VM. To leave the VM, close the
 with its **X** (this disconnects you). Don't use **Sign out**: that stops the portal. If IT signs out
 disconnected sessions after some hours, ask them to exempt this account.
 
-## 10. Let colleagues in (optional)
+## 10. Let colleagues in through IIS
 
-IT, or you as an administrator, opens the port on the VM:
+With IIS, everyone opens the portal at `http://<vm-name>/promotag/` on the normal web port 80.
+IIS only passes requests on to the portal. The portal itself keeps running in your session as before,
+because it drives a visible Edge window; IIS runs its apps in the background, where Edge can't show.
+
+You need IIS's **Application Request Routing** add-on. If IIS Manager shows **Server Farms** under the
+server, it's installed. Do these steps in IIS Manager on the VM, as administrator:
+
+1. **Turn on forwarding.** Click the server (e.g. `SG01WJH38VP`), double-click **Application Request
+   Routing Cache**, then click **Server Proxy Settings…** on the right. Tick **Enable proxy** and click
+   **Apply**. This only allows forwarding; your other IIS apps are not affected.
+2. **Copy the IIS settings file.** Create the folder `C:\inetpub\promotag` and copy
+   `C:\PromoTagPortal\vm-portal\iis\web.config` into it.
+3. **Add an application pool.** Click **Application Pools**, then **Add Application Pool…**. Name:
+   `PromoTagPortal`; .NET CLR version: **No Managed Code**; pipeline mode: **Integrated**.
+4. **Add the application.** Under **Sites**, right-click **Default Web Site** and choose **Add
+   Application…**. Alias: `promotag`; application pool: `PromoTagPortal`; physical path:
+   `C:\inetpub\promotag`.
+5. **Make IIS the only way in.** Create `C:\PromoTagPortal\vm-portal\data\env.cmd` with Notepad
+   containing these two lines, with your VM's name:
+
+   ```
+   set PTAE_HOST=127.0.0.1
+   set PTAE_PUBLIC_URL=http://SG01WJH38VP/promotag/
+   ```
+
+   Then close the portal's console window and double-click `update-portal.cmd`; it starts the portal
+   again with these settings.
+6. **Test it.** On your laptop, open `http://<vm-name>/promotag/` and log in.
+
+Live run updates come through IIS. If IIS holds them back, the page still updates every 3 seconds.
+For instant updates, set **Response buffer threshold (KB)** to `0` in the same **Server Proxy
+Settings**.
+
+**Without IIS:** leave out `env.cmd` and have IT open port 8080 instead. Colleagues then use
+`http://<vm-name>:8080/`:
 
 ```powershell
 New-NetFirewallRule -DisplayName 'Promo Tag Portal' -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow -Profile Domain
 ```
 
-To give each person their own login, create an entry for them with `dev\tools\credential-hasher.html`.
+**Logins for colleagues:** create an entry for each person with `dev\tools\credential-hasher.html`.
 Paste the entries, as shown, into `C:\PromoTagPortal\vm-portal\data\users.json`, then restart the
 portal. That file stays on the VM and is never in GitHub.
 
 ## 11. Point the Teams button to the VM
 
-The button's link must open the VM now, not Backoffice. Ask Jizong to use
-`http://<vm-name>:8080/#promotags=…` in the card. The exact message is in
-[TEAMS-SETUP.md](TEAMS-SETUP.md), step 3.
+The button's link must open the portal on the VM now, not Backoffice. Ask Jizong to use
+`http://<vm-name>/promotag/#promotags=…` in the card (`http://<vm-name>:8080/#promotags=…` without
+IIS). The exact message is in [TEAMS-SETUP.md](TEAMS-SETUP.md), step 3.
 
 ## Updating
 
@@ -148,10 +184,10 @@ After you change anything on your laptop:
    then **Sync Changes**. You can also ask Claude to commit and push.
 2. **VM:** double-click `C:\PromoTagPortal\vm-portal\update-portal.cmd`.
 
-The update script checks GitHub. If nothing is new, it leaves the portal alone. Otherwise it stops the
-portal, pulls the changes, reinstalls the libraries if they changed, and starts the portal again. It
-never stops the portal during a run; it tells you to try again later. It never touches
-`vm-portal\data`.
+The update script checks GitHub. If something is new, it stops the portal, pulls the changes,
+reinstalls the libraries if they changed, and starts the portal again. If nothing is new, it leaves a
+running portal alone, and starts it if it isn't running. It never stops the portal during a run; it
+tells you to try again later. It never touches `vm-portal\data`.
 
 Don't edit files in `C:\PromoTagPortal` on the VM. The update refuses to overwrite them, so make
 changes on your laptop and push them.
@@ -163,7 +199,10 @@ changes on your laptop and push them.
 - **Keep `vm-portal\data` private.** It holds the settings (including the Teams workflow URL), the
   logins, History with screenshots, and the Edge profile with your Backoffice session.
 - **One run at a time.** Everyone who is logged in sees the same run and its confirm screen.
-- **Plain HTTP:** the portal uses HTTP inside the company network.
+- **Plain HTTP:** the portal uses HTTP inside the company network. With IIS, adding an HTTPS binding
+  with a company certificate to **Default Web Site** makes `https://<vm-name>/promotag/` work too.
+- **Settings for this VM** (port, IIS, proxy) go in `vm-portal\data\env.cmd`, never in
+  `start-portal.cmd`, so updates keep them.
 
 ## If something doesn't work
 
@@ -173,10 +212,12 @@ changes on your laptop and push them.
 | A run stays at **signing in (SSO)** | Sign in to Backoffice in the portal's Edge window on the VM (step 7). |
 | Microsoft sign-in says this browser or device isn't allowed, or Edge asks you to sign in to the browser | In the portal's Edge window, sign in to Edge itself with your work account (profile icon, top right), then sign in to Backoffice again. |
 | **Network Error: Verify GlobalProtect VPN connection** | The VM can't reach Backoffice. Check that the Backoffice URL opens in Edge on the VM. |
-| Colleagues can't open the portal | Open the port (step 10), and use the VM name shown in the console window. |
-| **Teams reply not sent: Could not reach the Teams workflow** | The VM needs internet access to Power Automate. If it goes through a proxy, put IT's proxy address into the two `set` lines in `start-portal.cmd`. |
+| Colleagues can't open the portal | Check that `http://localhost/promotag/` works on the VM itself; if it does, port 80 is blocked between their PCs and the VM (ask IT). Without IIS: open port 8080 (step 10). |
+| `http://<vm-name>/promotag/` shows **502** or **Bad Gateway** | The portal isn't running: double-click `update-portal.cmd` on the VM. |
+| `http://<vm-name>/promotag/` shows **404** | Check step 10: **Enable proxy** must be ticked, and `web.config` must be in `C:\inetpub\promotag`. |
+| **Teams reply not sent: Could not reach the Teams workflow** | The VM needs internet access to Power Automate. If it goes through a proxy, add `set NODE_USE_ENV_PROXY=1` and `set HTTPS_PROXY=<proxy address from IT>` to `data\env.cmd`, then restart the portal. |
 | Git says **detected dubious ownership** | The folder was created as administrator. The update script fixes this by itself. For other Git commands, run once in a normal command prompt: `git config --global --add safe.directory C:/PromoTagPortal` |
 | The update says **Could not get the updates from GitHub** | Git's own message is shown above it. Check the VM's internet access. If the token expired, create a new one (step 3). Then open **Credential Manager** → **Windows Credentials**, remove `git:https://github.com`, and run the update again; it asks for the new token. |
 | The update says files were changed on this VM | Run the command it shows to undo them, then update again. Make changes on your laptop instead. |
 | The update says **A run is in progress** | Wait until the run has finished (or skip its confirmation), then update again. |
-| Port 8080 is already in use | In `start-portal.cmd`, set `PTAE_PORT` to another port, and use it in the links and the firewall rule. |
+| Port 8080 is already in use | Add `set PTAE_PORT=<another port>` to `data\env.cmd`, change 8080 in `C:\inetpub\promotag\web.config` to match, and restart the portal. |

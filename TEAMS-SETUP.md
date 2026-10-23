@@ -62,9 +62,10 @@ as you. To stop the replies, clear the field and click **Save & Grant access**.
 
 ## 3. Add the button to the alert card (Jizong)
 
-Send Jizong the message below. Replace `<vm-name>` with the VM's name (the portal's console window
-shows it). With the extension instead of the VM, the link starts with your Backoffice URL instead,
-for example `https://<backoffice-host>/backoffice/#promotags=`.
+Send Jizong the message below. Replace `<vm-name>` with the VM's name. The links use the portal's
+address through IIS ([DEPLOY-VM.md](DEPLOY-VM.md), step 10); without IIS, use
+`http://<vm-name>:8080/#promotags=` instead. With the extension instead of the VM, the link starts with
+your Backoffice URL, for example `https://<backoffice-host>/backoffice/#promotags=`.
 
 > Hi Jizong, could you add an "Open in Promo Tag Portal" button to the WTCSG Daily Alert card? It opens
 > our Promo Tag Portal with the alert's tags filled in.
@@ -77,19 +78,19 @@ for example `https://<backoffice-host>/backoffice/#promotags=`.
 > ]
 > ```
 >
-> `<LINK>` is `http://<vm-name>:8080/#promotags=` followed by the Alert_Message values, one per line,
+> `<LINK>` is `http://<vm-name>/promotag/#promotags=` followed by the Alert_Message values, one per line,
 > URL-encoded as a whole. For example:
 >
 > ```python
-> link = "http://<vm-name>:8080/#promotags=" + urllib.parse.quote("\n".join(messages), safe="")
+> link = "http://<vm-name>/promotag/#promotags=" + urllib.parse.quote("\n".join(messages), safe="")
 > ```
 >
 > ```powershell
-> $link = 'http://<vm-name>:8080/#promotags=' + [uri]::EscapeDataString($messages -join "`n")
+> $link = 'http://<vm-name>/promotag/#promotags=' + [uri]::EscapeDataString($messages -join "`n")
 > ```
 >
 > For today's alert (956 and 959) the link is:
-> `http://<vm-name>:8080/#promotags=956%20%7C%7C%20%2410%20OFF%20%2499%0A959%20%7C%7C%20%2430%20OFF%20%24199`
+> `http://<vm-name>/promotag/#promotags=956%20%7C%7C%20%2410%20OFF%20%2499%0A959%20%7C%7C%20%2430%20OFF%20%24199`
 
 Once the button is there, clicking it opens the portal with the tags filled in (log in first if
 asked). Check the tags, then click **Execute** as usual. Until the button exists, pasting the card
@@ -105,4 +106,4 @@ still works.
 | The test was sent, but nothing appears in Teams | Open the flow's **Run history**. The failed step shows the error. Check the link in `Channel link`. |
 | The reply appears as a new message, not in the alert's thread | No recent post in the channel contains the run's first tag code. |
 | The button opens the portal but no tags appear | The link must contain `#promotags=` followed by the encoded lines. If you weren't logged in, log in: the tags load right after. |
-| The button doesn't open the portal | Your PC must reach the VM: open `http://<vm-name>:8080/` by hand, and see [DEPLOY-VM.md](DEPLOY-VM.md), step 10. |
+| The button doesn't open the portal | Your PC must reach the VM: open `http://<vm-name>/promotag/` by hand, and see [DEPLOY-VM.md](DEPLOY-VM.md), step 10. |

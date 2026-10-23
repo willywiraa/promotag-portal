@@ -167,6 +167,7 @@ dev/tools/                   credential hasher
 vm-portal/                   the portal on a VM (DEPLOY-VM.md): Node runs background.js, Playwright drives Edge
   server.js                  web server: pages, logins (cookies), page API, live updates, screenshots
   start-portal.cmd           starts the portal; update-portal.cmd pulls from GitHub and restarts it
+  iis/web.config             IIS in front of the portal at /promotag/ (DEPLOY-VM.md, step 10)
   lib/                       chrome.* for Node, the Edge host, History on disk
   page/bootstrap.js          connects the engine in a Backoffice page to the server
   public/                    web shim that lets popup.js and history.js run as web pages
