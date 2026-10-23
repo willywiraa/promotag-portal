@@ -174,6 +174,22 @@
       return { widget: true, widgetName: w.widgetName || w.className || '', value: input.value };
     },
 
+    /**
+     * Opens the tree folder (Treeitem) that holds the target element, as its expander would: the
+     * client opens it and sends onOpen, and the server renders the children.
+     */
+    openTreeItem(args) {
+      let item = null;
+      for (let x = widgetFor(target(args.token)); x && !item; x = x.parent) {
+        if (x.widgetName === 'tree') break;
+        if (x.widgetName === 'treeitem') item = x;
+      }
+      if (!item || typeof item.setOpen !== 'function') return { widget: false };
+      const wasOpen = typeof item.isOpen === 'function' ? !!item.isOpen() : !!item._open;
+      if (!wasOpen) item.setOpen(true);
+      return { widget: true, wasOpen };
+    },
+
     /** Fires onOK on the nearest widget that listens for it (Enter-key equivalent). */
     fireOk(args) {
       const w = widgetFor(target(args.token));

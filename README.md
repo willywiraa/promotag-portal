@@ -136,8 +136,11 @@ If your Backoffice uses different captions:
 
 1. Run the job. The log lists the visible labels and buttons on screen.
 2. Adjust `CONFIG` at the top of `hybris-promotag-extension/scripts/selectors.js`. For example:
-   - `promotionTagParents` (default: `Marketing`, `Promotions`), the tree folders above Promotion Tag
-     that are opened when the tree filter leaves them collapsed
+   - `treeFilterText` (default: `Promotion Tag`), typed into *Filter tree*. Keep it the node's own
+     label: Backoffice opens the folders above a match but shows a match itself closed, so a broader
+     text such as `promotion` hides Promotion Tag inside the closed *Promotions* folder.
+   - `promotionTagParents` (default: `Marketing`, `Promotions`), the tree folders above Promotion Tag,
+     opened only if the filter leaves one closed
    - `descriptionLabels` (default: `Tag`, `Tag Description`, `Description`)
    - `tagCodeLabels`
    - `searchButtons`
@@ -196,9 +199,11 @@ The suites cover:
 - the Teams reply and alert links: message building and link parsing, plus the real service worker run
   against a stubbed browser (reply, retry, nothing posted on VPN failures, link import)
 - a syntax check
-- an end-to-end simulation against a scripted mock Backoffice: happy path, role selection, a collapsed
-  Promotions folder, a slow first tree filter, stale grid with retries, never reflected, already up to
-  date, cancel, not found, ambiguous, save rejected, session expiry, network down, and blocked screenshots
+- an end-to-end simulation against a scripted mock Backoffice whose explorer tree filters like the real
+  one: the first tag of a fresh session (also when Backoffice filters again, the dashboard refreshes in
+  the background, or a filter leaves Promotions closed), single-tag and multi-tag runs, role selection,
+  a slow first tree filter, stale grid with retries, never reflected, already up to date, cancel, not
+  found, ambiguous, save rejected, session expiry, network down, and blocked screenshots
 
 `dev\tests\ui\capture-ui.ps1` renders every popup state (login, settings, tags, processing,
 confirmation, success, failure), the same states as the VM portal at 1366×768 and 1920×1080, and the

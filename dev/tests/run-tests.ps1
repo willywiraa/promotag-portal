@@ -70,7 +70,7 @@ foreach ($page in $pages) {
     $argList = @(
         '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
         '--disable-extensions', '--allow-file-access-from-files',
-        "--user-data-dir=`"$profileDir`"", '--virtual-time-budget=300000', '--dump-dom', "`"$url`""
+        "--user-data-dir=`"$profileDir`"", '--virtual-time-budget=900000', '--dump-dom', "`"$url`""
     )
     $proc = Start-Process -FilePath $browserExe -ArgumentList $argList -RedirectStandardOutput $outFile `
         -RedirectStandardError $errFile -NoNewWindow -Wait -PassThru

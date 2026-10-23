@@ -15,11 +15,14 @@
 
   const CONFIG = {
     roleName: 'WTCSG Backoffice User Role',
-    treeFilterText: 'promotion',
     promotionTagLabel: 'Promotion Tag',
-    // Tree folders above Promotion Tag, outermost first; opened when the filter leaves them collapsed.
+    // Typed into "Filter tree". Backoffice opens the folders above a match but shows a match itself
+    // closed, so a broader text such as "promotion" leaves Promotion Tag hidden in the "Promotions" folder.
+    treeFilterText: 'Promotion Tag',
+    // Tree folders above Promotion Tag, outermost first; opened only if the filter leaves one closed.
     promotionTagParents: ['Marketing', 'Promotions'],
-    treeExpandAfterMs: 1500,
+    treeSettleMs: 1200, // the tree counts as settled after this long without changes
+    treeOpenTries: 4, // per folder: a later filter pass can close it again
     tagCodeLabels: ['Tag Code'],
     codeColumnHeaders: ['Tag Code', 'Code'],
     descriptionLabels: ['Tag', 'Tag Description', 'Description'],

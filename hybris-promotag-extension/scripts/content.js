@@ -293,46 +293,99 @@
       return { toggle, open };
     }
 
-    /** Clicks the expander of a collapsed folder above Promotion Tag; returns its label, or null. */
-    function expandTreeParent(tries) {
+    /** Notes when the explorer tree last changed: every filter pass and every opened folder re-renders it. */
+    function watchTree() {
+      const watch = { changedAt: Date.now() };
+      const inTree = (n) =>
+        !!n && n.nodeType === 1 && (n.matches('.z-tree, .z-treerow') || !!n.closest('.z-tree') || !!n.querySelector('.z-treerow'));
+      const obs = new MutationObserver((records) => {
+        if (records.some((r) => inTree(r.target) || [...r.addedNodes, ...r.removedNodes].some(inTree))) watch.changedAt = Date.now();
+      });
+      obs.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'aria-expanded'] });
+      watch.stop = () => obs.disconnect();
+      return watch;
+    }
+
+    /** Opens a folder through ZK, as its expander does: true if opened, false if already open, null without ZK. */
+    async function openTreeItemViaZk(row) {
+      if (!bridge || !(await bridge.ready())) return null;
+      const token = D.markTarget(row);
+      try {
+        const r = await bridge.call('openTreeItem', { token });
+        return r && r.widget ? !r.wasOpen : null;
+      } catch (_) {
+        return null;
+      } finally {
+        D.unmarkTarget(row);
+      }
+    }
+
+    function clickTreeExpander(row) {
+      const { toggle, open } = treeExpander(row);
+      if (!toggle || open === true) return false;
+      D.simulateClick(toggle);
+      return true;
+    }
+
+    /**
+     * Opens a closed tree folder; false if nothing was done. Retries alternate between ZK's API and the
+     * expander, so one way that doesn't work on this Backoffice can't use up every try.
+     */
+    async function openTreeFolder(row, expanderFirst) {
+      if (expanderFirst) return clickTreeExpander(row) || (await openTreeItemViaZk(row)) === true;
+      const viaZk = await openTreeItemViaZk(row);
+      return viaZk === null ? clickTreeExpander(row) : viaZk;
+    }
+
+    /** Opens the outermost closed folder above Promotion Tag; returns its label, or null. */
+    async function openParentFolder(tries) {
       for (const label of cfg.promotionTagParents) {
-        if ((tries.get(label) || 0) >= 2) continue;
         const el = D.findFirst('.z-tree span.z-label, .z-tree div.z-treecell-content', { text: { equals: label } });
         const row = el && el.closest('tr, [role="treeitem"]');
-        const { toggle, open } = row ? treeExpander(row) : {};
-        if (!toggle || open === true) continue;
-        tries.set(label, (tries.get(label) || 0) + 1);
-        D.simulateClick(toggle);
+        const n = tries.get(label) || 0;
+        if (!row || n >= cfg.treeOpenTries) continue;
+        if (!(await openTreeFolder(row, n % 2 === 1))) continue;
+        tries.set(label, n + 1);
         return label;
       }
       return null;
     }
 
     /**
-     * Filters the explorer tree and waits for the Promotion Tag node. The first filter of a session can
-     * take a while, and the node sits in a folder ("Promotions") that may stay collapsed, so once
-     * Backoffice is idle any collapsed parent folder is opened.
+     * Filters the explorer tree by Promotion Tag's own label, so Backoffice itself opens the folders
+     * above it, and waits for the node. Nothing is decided while the tree is still changing: on a
+     * fresh session Backoffice can filter more than once, and each pass rebuilds the tree. Other
+     * traffic on the page (e.g. the Home dashboard refreshing) does not hold this up. A folder above
+     * Promotion Tag that stays closed is opened, again if a later pass closes it.
      */
     async function revealPromotionTag(ctx, signal) {
       const filter = await waitFind('treeFilter', ctx, signal);
       await found(filter);
-      const typedAt = Date.now();
-      await D.setZkInputValue(filter.el, cfg.treeFilterText, { bridge, changing: true, enter: true });
-      await waitIdle(signal);
-      const filteredAt = Date.now();
-      const tries = new Map();
-      return D.waitFor(async () => {
-        checkFatal(signal);
-        const hit = find('promotionTagNode', ctx);
-        if (hit) return hit;
-        const st = await bridgeStatus();
-        const err = st && st.lastAuError;
-        if (err && err.kind === 'network' && err.at >= typedAt) throw new PtaeError('NETWORK', MSG.NETWORK); // no point waiting
-        if (Date.now() - filteredAt < cfg.treeExpandAfterMs || (st ? st.busy : domBusy())) return null;
-        const opened = expandTreeParent(tries);
-        if (opened) await log('info', `Opening "${opened}" in the tree…`);
-        return null;
-      }, waitOpts(signal, PTAE.SELECTORS.promotionTagNode.description, cfg.budgets.navigate));
+      const tree = watchTree();
+      try {
+        const typedAt = Date.now();
+        await D.setZkInputValue(filter.el, cfg.treeFilterText, { bridge, changing: true, enter: true });
+        const tries = new Map();
+        return await D.waitFor(async () => {
+          checkFatal(signal);
+          const st = await bridgeStatus();
+          const err = st && st.lastAuError;
+          if (err && err.kind === 'network' && err.at >= typedAt) throw new PtaeError('NETWORK', MSG.NETWORK); // no point waiting
+          const now = Date.now();
+          if (now - Math.max(tree.changedAt, typedAt) < cfg.treeSettleMs) return null;
+          const hit = find('promotionTagNode', ctx);
+          if (hit) return hit;
+          // Folders are opened only once the filter has been answered, which re-renders the tree (the
+          // page's other requests don't tell): before that, the tree shown is not filtered yet. If the
+          // tree never changes (e.g. the same filter text as before), go ahead after half the budget.
+          if (tree.changedAt <= typedAt && now - typedAt < cfg.budgets.navigate / 2) return null;
+          const opened = await openParentFolder(tries);
+          if (opened) await log('info', `Opening "${opened}" in the tree…`);
+          return null;
+        }, waitOpts(signal, PTAE.SELECTORS.promotionTagNode.description, cfg.budgets.navigate));
+      } finally {
+        tree.stop();
+      }
     }
 
     async function stageNavigate(ctx, signal) {
@@ -344,16 +397,27 @@
       }
       if (!node) node = await revealPromotionTag(ctx, signal);
       await found(node);
-      D.simulateClick(node.el);
-      try {
-        await D.waitFor(() => {
-          checkFatal(signal);
-          const n = find('promotionTagNode', ctx);
-          return n && isTreeSelected(n.el);
-        }, waitOpts(signal, 'Promotion Tag to open'));
-      } catch (err) {
-        if (!(err instanceof D.TimeoutError) || !find('searchModeToggle', ctx)) throw err;
-        await log('warn', 'Could not confirm the tree selection; continuing because the search panel is visible.');
+      for (let attempt = 1; ; attempt++) {
+        D.simulateClick(node.el);
+        try {
+          await D.waitFor(() => {
+            checkFatal(signal);
+            const n = find('promotionTagNode', ctx);
+            return n && isTreeSelected(n.el);
+          }, waitOpts(signal, 'Promotion Tag to open'));
+          break;
+        } catch (err) {
+          if (!(err instanceof D.TimeoutError)) throw err;
+          if (find('searchModeToggle', ctx)) {
+            await log('warn', 'Could not confirm the tree selection; continuing because the search panel is visible.');
+            break;
+          }
+          // A re-render can replace the row under the click: click the node shown now, once.
+          const again = attempt < 2 && find('promotionTagNode', ctx);
+          if (!again) throw err;
+          await log('warn', 'Promotion Tag did not open; clicking it again.');
+          node = again;
+        }
       }
       await waitIdle(signal);
     }

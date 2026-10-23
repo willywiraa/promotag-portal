@@ -53,7 +53,25 @@
   window.zAu = { processing: () => pendingAu > 0 };
 
   // --- ZK widget stubs ---------------------------------------------------------------------------
+  /** Tree rows answer like ZK: the row's widget sits in a Treeitem that can be opened (onOpen to the server). */
+  function treeWidgetFor(row) {
+    const label = row.dataset.label;
+    const tree = { widgetName: 'tree', parent: null };
+    const item = {
+      widgetName: 'treeitem',
+      parent: tree,
+      isOpen: () => row.dataset.open === 'true',
+      setOpen(open) {
+        M.log.push(`tree-open:${label}`);
+        setFolder(label, open);
+      },
+    };
+    return { widgetName: 'treerow', parent: item };
+  }
+
   function widgetFor(el) {
+    const row = el && el.closest && el.closest('tr.z-treerow');
+    if (row) return M.zkTreeApi ? treeWidgetFor(row) : null;
     const input = el && el.matches && el.matches('input') ? el : null;
     if (!input) return null;
     if (!input.__w) {
@@ -77,6 +95,7 @@
   // --- model -------------------------------------------------------------------------------------
   const M = (window.MockBackoffice = {
     latency: 120,
+    timers: [],
     networkDown: false,
     staleSearches: 0,
     neverReflect: false,
@@ -92,9 +111,16 @@
   const $r = (role) => document.querySelector(`[data-role="${role}"]`);
 
   function reset(opts = {}) {
+    clearInterval(M.pollTimer);
+    (M.timers || []).forEach(clearTimeout);
+    M.timers = [];
     M.latency = opts.latency || 120;
-    M.filterLatency = opts.filterLatency || null; // a slow first tree filter
-    M.folderCollapsed = !!opts.folderCollapsed; // the filter leaves "Promotions" collapsed
+    M.filterLatency = opts.filterLatency || null; // a slow tree filter
+    M.filterMode = opts.filterMode || 'substring'; // 'anyWord': a node matches when it contains any typed word
+    M.latePasses = opts.latePasses || []; // ms after the session's first filter at which Backoffice filters again
+    M.openLatency = opts.openLatency || null; // a slow folder open
+    M.zkTreeApi = opts.zkTreeApi !== false; // tree rows are ZK widgets (Treeitem.setOpen)
+    M.expanderIgnored = !!opts.expanderIgnored; // a synthetic click on an expander does nothing
     M.networkDown = !!opts.networkDown;
     M.staleSearches = opts.staleSearches || 0;
     M.neverReflect = !!opts.neverReflect;
@@ -104,7 +130,6 @@
     M.state = {
       page: opts.page || 'shell',
       roleSelected: false,
-      treeFiltered: !!opts.treeFiltered,
       typeOpen: !!opts.typeOpen,
       searchOpen: !!opts.searchOpen,
       searchCode: '',
@@ -113,8 +138,18 @@
       dirty: null,
       staleLeft: 0,
     };
+    // Explorer tree: the filter text, the folders opened by hand since the last filter pass, and
+    // whether this session has filtered before. `treeFiltered` starts on a tree filtered down to
+    // Promotion Tag (a later tag in a run); `treeOpen` lists folders already open.
+    M.tree = { filter: opts.treeFiltered ? 'Promotion Tag' : '', open: new Set(opts.treeOpen || []), filtered: !!opts.treeFiltered };
     app().innerHTML = '';
     renderAll();
+    // The Home dashboard refreshes its live figures in the background (AU traffic unrelated to the tree).
+    if (opts.dashboardRefresh) M.pollTimer = setInterval(() => au(null, opts.dashboardRefresh.latency), opts.dashboardRefresh.every);
+  }
+
+  function later(fn, ms) {
+    M.timers.push(setTimeout(fn, ms));
   }
 
   // --- rendering ---------------------------------------------------------------------------------
@@ -170,21 +205,78 @@
       </div>`;
   }
 
+  // The part of the real explorer tree that matters (labels as in the real Backoffice).
+  const TREE = [
+    { label: 'Home' },
+    { label: 'System', children: [{ label: 'Types' }, { label: 'Users' }] },
+    { label: 'Catalog', children: [{ label: 'Catalogs' }, { label: 'Products' }] },
+    {
+      label: 'Marketing',
+      children: [
+        { label: 'Promotion Website Groups' }, { label: 'Promotion Rules' }, { label: 'Promotion Templates' },
+        { label: 'Promotion Modules' }, { label: 'Promotion Rule Groups' },
+        { label: 'Promotions', children: [{ label: 'Promotion Tag' }, { label: 'Promotion Tag Group' }, { label: 'Promotion Source Rules' }] },
+        { label: 'Promotion Planning' }, { label: 'Bankday Promotion' }, { label: 'Vip Promotion' }, { label: 'Vip Campaign Promotion' },
+      ],
+    },
+    { label: 'Saved queries', always: true },
+  ];
+
+  /**
+   * The rows the tree shows. Like Backoffice: without a filter, folders are closed unless opened by
+   * hand. With a filter, a node whose label matches is shown closed (so "promotion" leaves the
+   * "Promotions" folder closed, with Promotion Tag hidden inside), and folders above a match are
+   * opened by the filter itself.
+   */
+  function treeRows() {
+    const f = M.tree.filter.trim().toLowerCase();
+    const words = f.split(/\s+/).filter(Boolean);
+    const matches = (n) => !!f && (M.filterMode === 'anyWord' ? words.some((w) => n.label.toLowerCase().includes(w)) : n.label.toLowerCase().includes(f));
+    const below = (n) => (n.children || []).some((c) => matches(c) || below(c));
+    const rows = [];
+    (function walk(nodes, depth, all) {
+      for (const n of nodes) {
+        let open;
+        if (!f || all || n.always || matches(n)) open = M.tree.open.has(n.label);
+        else if (below(n)) open = true;
+        else continue;
+        rows.push({ label: n.label, depth, folder: !!n.children, open: !!n.children && open });
+        if (n.children && open) walk(n.children, depth + 1, !f || all || matches(n));
+      }
+    })(TREE, 0, false);
+    return rows;
+  }
+
   function renderTree() {
     const s = M.state;
-    const open = !M.folderCollapsed;
-    // [label, folder state]: like ZK, a folder row has an expander (caret right = closed, down = open).
-    const nodes = !s.treeFiltered
-      ? [['Catalog'], ['System'], ['User']]
-      : [['Marketing', 'open'], ['Promotions', open ? 'open' : 'closed']].concat(open ? [['Promotion Tag'], ['Promotion Tag Group']] : []);
-    document.getElementById('tree-body').innerHTML = nodes
-      .map(([n, folder]) => {
-        const sel = n === 'Promotion Tag' && s.typeOpen;
-        const icon = folder ? `<span id="${zid()}-open" class="z-tree-icon"><i class="z-icon-caret-${folder === 'open' ? 'down' : 'right'}"></i></span>` : '';
-        return `<tr id="${zid()}" class="z-treerow${sel ? ' z-treerow-selected' : ''}" aria-selected="${sel}">
-          <td class="z-treecell"><div class="z-treecell-content">${icon}<span id="${zid()}" class="z-label">${n}</span></div></td></tr>`;
+    // Like ZK, a folder row has an expander (caret right = closed, down = open). IDs change on every render.
+    document.getElementById('tree-body').innerHTML = treeRows()
+      .map((r) => {
+        const sel = r.label === 'Promotion Tag' && s.typeOpen;
+        const icon = r.folder ? `<span id="${zid()}-open" class="z-tree-icon"><i class="z-icon-caret-${r.open ? 'down' : 'right'}"></i></span>` : '';
+        return `<tr id="${zid()}" class="z-treerow${sel ? ' z-treerow-selected' : ''}" aria-selected="${sel}" data-label="${r.label}" data-open="${r.open}">
+          <td class="z-treecell"><div class="z-treecell-content" style="padding-left:${r.depth * 16}px">${icon}<span id="${zid()}" class="z-label">${r.label}</span></div></td></tr>`;
       })
       .join('');
+  }
+
+  /** A filter pass rebuilds the tree: folders opened by hand close again. */
+  function applyFilter(value) {
+    M.tree.filter = value;
+    M.tree.open = new Set();
+    M.log.push(`tree-filter:${value}`);
+    renderTree();
+  }
+
+  /** Opens or closes a folder (one AU round trip). */
+  function setFolder(label, open) {
+    au(() => {
+      const isOpen = treeRows().some((r) => r.label === label && r.open);
+      const want = open == null ? !isOpen : !!open;
+      if (want) M.tree.open.add(label);
+      else M.tree.open.delete(label);
+      renderTree();
+    }, M.openLatency);
   }
 
   function renderBrowser() {
@@ -247,9 +339,12 @@
   function serverChange(input, value) {
     const role = input.dataset.role;
     if (role === 'filter') {
+      const first = !M.tree.filtered;
+      M.tree.filtered = true;
       au(() => {
-        M.state.treeFiltered = /promo/i.test(value);
-        renderTree();
+        applyFilter(value);
+        // The session's first filter can be applied again a little later, rebuilding the tree.
+        if (first) M.latePasses.forEach((ms) => later(() => au(() => applyFilter(M.tree.filter)), ms));
       }, M.filterLatency);
       return;
     }
@@ -319,16 +414,13 @@
     }
     const expander = t.closest('.z-tree-icon');
     if (expander) {
-      const folder = expander.closest('.z-treerow').textContent.trim();
-      M.log.push(`tree-toggle:${folder}`);
-      au(() => {
-        if (folder === 'Promotions') M.folderCollapsed = !M.folderCollapsed;
-        renderTree();
-      });
+      const folder = expander.closest('.z-treerow').dataset.label;
+      M.log.push(`tree-toggle${M.expanderIgnored ? '-ignored' : ''}:${folder}`);
+      if (!M.expanderIgnored) setFolder(folder);
       return;
     }
     const treeRow = t.closest('.z-treerow');
-    if (treeRow && treeRow.textContent.trim() === 'Promotion Tag') {
+    if (treeRow && treeRow.dataset.label === 'Promotion Tag') {
       au(() => {
         M.state.typeOpen = true;
         renderTree();

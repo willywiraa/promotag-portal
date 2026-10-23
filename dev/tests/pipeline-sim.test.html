@@ -79,17 +79,93 @@
     assertEqual(t.result && t.result.outcome, 'success', JSON.stringify(t.result));
   });
 
-  test('filter leaves "Promotions" collapsed → opens the folder, then Promotion Tag', async () => {
-    const t = await scenario({ page: 'shell', folderCollapsed: true });
-    assertEqual(t.result && t.result.outcome, 'success', `result: ${JSON.stringify(t.result)} | ${t.logs.slice(-4).join(' / ')}`);
-    assertEqual(M.log.filter((x) => x.startsWith('tree-toggle')).join(','), 'tree-toggle:Promotions', 'only the collapsed folder is clicked');
+  const outcome = (t) => `result: ${JSON.stringify(t.result)} | ${t.logs.slice(-4).join(' / ')}`;
+  const folderOpens = () => M.log.filter((x) => /^tree-(open|toggle)/.test(x));
+
+  // The reported bug: "promotion" left the "Promotions" folder closed, and opening it failed on the
+  // first tag of a run. The tree is filtered by Promotion Tag's own label now.
+  test('first tag, fresh session: filters by "Promotion Tag" and opens it without touching a folder', async () => {
+    const t = await scenario({ page: 'shell' });
+    assertEqual(t.result && t.result.outcome, 'success', outcome(t));
+    assert(M.log.includes('tree-filter:Promotion Tag'), `filter text: ${M.log.filter((x) => x.startsWith('tree-filter')).join(',')}`);
+    assertEqual(folderOpens().length, 0, 'no folder opened by the portal');
+  });
+
+  test('first tag, fresh session: Backoffice filters again 3 s and 5 s later → still opens Promotion Tag', async () => {
+    const t = await scenario({ page: 'shell', latePasses: [3000, 5000] });
+    assertEqual(t.result && t.result.outcome, 'success', outcome(t));
+    assert(has(t, /Promotion Tag tree node found/), 'node found');
+  });
+
+  test('filter matching word by word leaves "Promotions" closed → opened through ZK, then Promotion Tag', async () => {
+    const t = await scenario({ page: 'shell', filterMode: 'anyWord' });
+    assertEqual(t.result && t.result.outcome, 'success', outcome(t));
+    assertEqual(folderOpens().join(','), 'tree-open:Promotions', 'only the closed folder is opened');
     assert(has(t, /Opening "Promotions" in the tree/), 'logged');
+  });
+
+  test('the same without ZK\'s tree API → clicks the folder\'s expander', async () => {
+    const t = await scenario({ page: 'shell', filterMode: 'anyWord', zkTreeApi: false });
+    assertEqual(t.result && t.result.outcome, 'success', outcome(t));
+    assertEqual(folderOpens().join(','), 'tree-toggle:Promotions');
+  });
+
+  test('a later filter pass closes the opened folder again → opens it again, then by its expander', async () => {
+    const t = await scenario({ page: 'shell', filterMode: 'anyWord', latePasses: [2000] });
+    assertEqual(t.result && t.result.outcome, 'success', outcome(t));
+    assertEqual(folderOpens().join(','), 'tree-open:Promotions,tree-toggle:Promotions', 'retries alternate between ZK and the expander');
+  });
+
+  test('ZK\'s open does nothing on this Backoffice → the retry clicks the expander', async () => {
+    M.reset({ page: 'shell', filterMode: 'anyWord' });
+    const t = makeTransport();
+    const runner = PTAE.createRunner({ transport: t, bridge });
+    t.runner = runner;
+    const realWidget = zk.Widget.$;
+    zk.Widget.$ = (el) => {
+      const w = realWidget(el);
+      if (w && w.parent && w.parent.widgetName === 'treeitem') w.parent.setOpen = () => M.log.push('tree-open-ignored');
+      return w;
+    };
+    try {
+      await runner.run({ id: 'job-zk-noop', code: '895', newDesc: '10% OFF $70', roleName: 'WTCSG Backoffice User Role', confirmBeforeSave: true });
+    } finally {
+      zk.Widget.$ = realWidget;
+    }
+    assertEqual(t.result && t.result.outcome, 'success', outcome(t));
+    assertEqual(M.log.filter((x) => /^tree-(open|toggle)/.test(x)).join(','), 'tree-open-ignored,tree-toggle:Promotions');
+  });
+
+  test('the Home dashboard refreshing in the background does not hold up the tree', async () => {
+    const t = await scenario({ page: 'shell', latePasses: [3000], dashboardRefresh: { every: 700, latency: 250 } });
+    assertEqual(t.result && t.result.outcome, 'success', outcome(t));
+    assertEqual(folderOpens().length, 0, 'no folder opened');
+  });
+
+  test('... nor the opening of a closed folder', async () => {
+    const t = await scenario({ page: 'shell', filterMode: 'anyWord', latePasses: [3000], dashboardRefresh: { every: 500, latency: 400 } });
+    assertEqual(t.result && t.result.outcome, 'success', outcome(t));
+    assert(folderOpens().length >= 1 && folderOpens().every((x) => /^tree-(open|toggle):Promotions$/.test(x)), folderOpens().join(','));
   });
 
   test('slow first tree filter (9 s) → waits for it instead of timing out', async () => {
     const t = await scenario({ page: 'shell', filterLatency: 9000 });
-    assertEqual(t.result && t.result.outcome, 'success', `result: ${JSON.stringify(t.result)} | ${t.logs.slice(-4).join(' / ')}`);
-    assert(!M.log.some((x) => x.startsWith('tree-toggle')), 'no folder clicked while the filter was loading');
+    assertEqual(t.result && t.result.outcome, 'success', outcome(t));
+    assert(!M.log.some((x) => /^tree-(open|toggle):Promotions/.test(x)), `no folder opened while the filter was loading: ${folderOpens().join(',')}`);
+  });
+
+  test('Promotion Tag already visible (folders left open) → clicked without filtering', async () => {
+    const t = await scenario({ page: 'shell', treeOpen: ['Marketing', 'Promotions'] });
+    assertEqual(t.result && t.result.outcome, 'success', outcome(t));
+    assert(!M.log.some((x) => x.startsWith('tree-filter')), 'tree not filtered');
+  });
+
+  test('single-tag runs, each on a fresh session → every one succeeds', async () => {
+    for (const [code, desc] of [['895', '10% OFF $70'], ['896', '3 FOR $25'], ['897', '2 FOR $9']]) {
+      const t = await scenario({ page: 'shell', latePasses: [3000, 5000], records: [{ code, desc: 'OLD' }] }, { code, newDesc: desc });
+      assertEqual(t.result && t.result.outcome, 'success', `${code}: ${outcome(t)}`);
+      assertEqual(M.records[0].desc, desc, `${code} saved`);
+    }
   });
 
   test('grid stale for 2 searches → verified on attempt 3', async () => {
@@ -194,6 +270,18 @@
   }
 
   const THREE = [{ code: '888', desc: '3 FOR $15.90' }, { code: '889', desc: '3 FOR $20' }, { code: '892', desc: '6 FOR $27.50' }];
+
+  test('multi-tag run on a fresh session: the first tag and the later ones all succeed', async () => {
+    const [a, b, c] = await sequence({ page: 'shell', records: THREE, latePasses: [3000, 5000] }, [
+      { job: { code: '888', newDesc: '3 FOR $16.65' } },
+      { job: { code: '889', newDesc: '3 FOR $23' } },
+      { job: { code: '892', newDesc: '6 FOR $29.50' } },
+    ]);
+    [a, b, c].forEach((t, i) => assertEqual(t.result.outcome, 'success', `tag ${i + 1}: ${outcome(t)}`));
+    assertEqual(M.records.map((r) => r.desc).join(' | '), '3 FOR $16.65 | 3 FOR $23 | 6 FOR $29.50');
+    assert(has(a, /Promotion Tag tree node found/), 'first tag opened Promotion Tag from the tree');
+    assert(has(b, /Promotion Tag is already open/) && has(c, /Promotion Tag is already open/), 'later tags reuse the open screen');
+  });
 
   test('multi-tag run: three tags in a row, later tags reuse the open screen', async () => {
     const [a, b, c] = await sequence({ page: 'shell', records: THREE }, [
