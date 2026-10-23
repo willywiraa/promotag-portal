@@ -23,6 +23,7 @@ const vm = require('vm');
 const { randomBytes } = require('crypto');
 const { createChrome, routeBackofficeFetch, requestContext, EXTENSION_ID } = require('./lib/chrome-shim');
 const { createFileHistoryDb } = require('./lib/file-history-db');
+const { isLocal } = require('./lib/visitor');
 
 const EXT = path.resolve(__dirname, '..', 'hybris-promotag-extension');
 const PUBLIC = path.join(__dirname, 'public');
@@ -102,27 +103,6 @@ function sessionCookie(s) {
   if (!s) return 'ptae_sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0';
   const age = Math.max(0, Math.floor((s.expiresAt - Date.now()) / 1000));
   return `ptae_sid=${encodeURIComponent(s.token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}`;
-}
-
-const LOOPBACK = ['127.0.0.1', '::1', '::ffff:127.0.0.1'];
-
-/** "10.1.2.3:51234" / "[::1]:51234" / "::1" -> the address alone. */
-function addressOnly(s) {
-  const v = String(s || '').trim();
-  const v6 = /^\[([^\]]+)\](?::\d+)?$/.exec(v);
-  if (v6) return v6[1];
-  return /^\d+\.\d+\.\d+\.\d+:\d+$/.test(v) ? v.replace(/:\d+$/, '') : v;
-}
-
-/**
- * Whether the visitor sits at the VM itself. Behind IIS every request arrives from the VM, so then the
- * visitor is the last X-Forwarded-For entry, the one IIS added. The header only counts when the request
- * comes from the VM, so it can't be faked from another PC.
- */
-function isLocal(req) {
-  if (!LOOPBACK.includes(req.socket.remoteAddress)) return false;
-  const forwarded = req.headers['x-forwarded-for'];
-  return !forwarded || LOOPBACK.includes(addressOnly(String(forwarded).split(',').pop()));
 }
 
 /** Portal page messages (UI_*): the visitor's login is passed to background.js for this request only. */
