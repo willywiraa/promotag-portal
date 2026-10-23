@@ -55,14 +55,9 @@ and `git --version` should print a version.
    ```
 
    When Git asks you to sign in, choose **Token** and paste the token. Windows remembers it.
-3. Install the libraries:
-
-   ```
-   cd C:\PromoTagPortal\vm-portal
-   npm ci
-   ```
-
-   If the VM can't download from npm, copy `vm-portal\node_modules` from your laptop instead.
+3. Nothing to install: the portal downloads its libraries from npm the first time it starts (step 4).
+   If the VM can't reach npm, copy the `vm-portal\node_modules` folder from your laptop into
+   `C:\PromoTagPortal\vm-portal\` instead.
 
 **Copied the folders by hand earlier?** Close the portal's console window and rename
 `C:\PromoTagPortal` to `C:\PromoTagPortal-old`. Do steps 1–3, then move
@@ -181,7 +176,7 @@ IIS). The exact message is in [TEAMS-SETUP.md](TEAMS-SETUP.md), step 3.
 After you change anything on your laptop:
 
 1. **Laptop:** commit and push. In VS Code, open **Source Control**, type a message, click **Commit**,
-   then **Sync Changes**. You can also ask Claude to commit and push.
+   then **Sync Changes**.
 2. **VM:** double-click `C:\PromoTagPortal\vm-portal\update-portal.cmd`.
 
 The update script checks GitHub. If something is new, it stops the portal, pulls the changes,
@@ -208,6 +203,7 @@ changes on your laptop and push them.
 
 | Problem | Fix |
 |---|---|
+| The console says **The libraries could not be installed**, or **Cannot find module 'playwright-core'** | The VM couldn't download the libraries from npm; the lines above it say why. If the VM reaches the internet through a proxy, add the two proxy lines to `data\env.cmd` (see `start-portal.cmd`). Otherwise copy `vm-portal\node_modules` from your laptop into `C:\PromoTagPortal\vm-portal\`. Then start the portal again. |
 | The console says **Microsoft Edge did not start** | Check that Edge opens normally on the VM, then restart the portal. |
 | A run stays at **signing in (SSO)** | Sign in to Backoffice in the portal's Edge window on the VM (step 7). |
 | Microsoft sign-in says this browser or device isn't allowed, or Edge asks you to sign in to the browser | In the portal's Edge window, sign in to Edge itself with your work account (profile icon, top right), then sign in to Backoffice again. |

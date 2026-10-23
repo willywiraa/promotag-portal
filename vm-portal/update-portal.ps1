@@ -5,8 +5,9 @@
     1. Checks GitHub for new commits.
     2. With new commits: stops the portal (never while a run is in progress) and pulls them.
        Without: if the portal is running, nothing else happens.
-    3. Installs the libraries when package-lock.json changed or they are missing.
-    4. Starts the portal (the "Promo Tag Portal" scheduled task, or start-portal.cmd).
+    3. When package-lock.json changed: removes the old libraries.
+    4. Starts the portal (the "Promo Tag Portal" scheduled task, or start-portal.cmd), which installs
+       the libraries first when they are missing.
 
   vm-portal\data (settings, logins, History, the Edge profile) is not in Git and is never touched.
 #>
@@ -124,26 +125,28 @@ if ($behind -gt 0) {
     Stop-Portal # clears what a portal that crashed may have left behind
 }
 
-# 3. Libraries
-if ($librariesChanged -or -not (Test-Path (Join-Path $vmDir 'node_modules'))) {
-    Say 'Installing libraries (npm ci)...'
-    Push-Location $vmDir
-    & npm ci --no-audit --no-fund
-    $npmFailed = $LASTEXITCODE
-    Pop-Location
-    if ($npmFailed) { Fail 'npm ci failed (see above). Copy vm-portal\node_modules from your laptop, then start the portal.' }
+# 3. Changed libraries: remove the old ones. start-portal.cmd installs the new ones (with the proxy
+#    settings from data\env.cmd), so installing happens in one place.
+$modules = Join-Path $vmDir 'node_modules'
+if ($librariesChanged -and (Test-Path $modules)) {
+    Say 'The libraries changed; removing the old ones.'
+    & cmd /c rd /s /q "\\?\$modules"
 }
 
 # 4. Start the portal
-Say 'Starting the portal...'
+if (Test-Path (Join-Path $modules 'playwright-core\package.json')) {
+    Say 'Starting the portal...'
+} else {
+    Say 'Starting the portal. It installs its libraries first; this takes a minute...'
+}
 Start-Portal
-$deadline = (Get-Date).AddSeconds(90)
+$deadline = (Get-Date).AddSeconds(240)
 $up = $false
 while (-not $up -and (Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 2
     $up = Test-PortalUp
 }
-if (-not $up) { Fail 'The portal did not start. Its console window shows the error.' }
+if (-not $up) { Fail 'The portal did not start. Its console window ("Promo Tag Portal") shows why.' }
 $version = (Get-Content (Join-Path $repo 'hybris-promotag-extension\manifest.json') -Raw | ConvertFrom-Json).version
 $done = if ($behind -gt 0) { 'Updated' } else { 'Started' }
 Say "$done. The portal is running version $version. Open http://localhost:$((Get-Content $stateFile -Raw | ConvertFrom-Json).port)/ on this VM." 'Green'
