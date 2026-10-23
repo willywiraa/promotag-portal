@@ -81,11 +81,12 @@ access key, not your IT password. For safety, the first login can only be create
 
 ## 6. Settings
 
-In the portal, open **⚙ Settings**:
+In the portal, open **Settings** (top right; it opens by itself the first time):
 
-1. **Backoffice URL**: paste it and click **Save & Grant access**.
-2. **Teams reply: workflow URL**: paste the flow's HTTP URL (see [TEAMS-SETUP.md](TEAMS-SETUP.md)), click
+1. **Backoffice → Backoffice URL**: paste it and click **Save & Grant access**.
+2. **Teams reply → Workflow URL**: paste the flow's HTTP URL (see [TEAMS-SETUP.md](TEAMS-SETUP.md)), click
    **Save & Grant access**, then **Send test**.
+3. Click **Back to tags**.
 
 ## 7. Sign in to Backoffice once (on the VM)
 
@@ -93,7 +94,7 @@ In the portal's Edge window, press **Ctrl+T**, open the Backoffice URL and sign 
 including MFA. Then close that tab with **Ctrl+W**. The VM keeps this session in
 `vm-portal\data\edge-profile`.
 
-When the session expires later, a run waits at **signing in (SSO)**. Sign in again in that Edge
+When the session expires later, a run waits at **Signing in (SSO)**. Sign in again in that Edge
 window on the VM within 3 minutes, or sign in and then run again.
 
 ## 8. Test it from your laptop

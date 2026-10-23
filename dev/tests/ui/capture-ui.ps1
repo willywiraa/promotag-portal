@@ -29,7 +29,17 @@ function Capture([string]$page, [string]$query, [string]$name, [string]$size) {
     Write-Host "saved $png"
 }
 
-foreach ($view in 'login', 'setup', 'portal', 'settings', 'running', 'confirm', 'result', 'stale') {
-    Capture 'popup-preview.html' "?view=$view" "popup-$view" '520,860'
+# The extension popup (one column)
+foreach ($view in 'login', 'setup', 'unconfigured', 'portal', 'settings', 'running', 'confirm', 'success', 'failure', 'result', 'stale') {
+    Capture 'popup-preview.html' "?view=$view" "popup-$view" '560,900'
+}
+Capture 'popup-preview.html' '?view=result&pick=2' 'popup-result-detail' '560,900'
+# The VM portal in a browser window (two columns)
+foreach ($size in '1366,768', '1920,1080') {
+    $width = $size.Split(',')[0]
+    foreach ($view in 'login', 'portal', 'settings', 'running', 'confirm', 'success', 'failure') {
+        Capture 'popup-preview.html' "?view=$view&wide=1" "portal-$width-$view" $size
+    }
+    Capture 'popup-preview.html' '?view=result&wide=1&log=1' "portal-$width-result-log" $size
 }
 Capture 'history-preview.html' '' 'history' '1400,900'

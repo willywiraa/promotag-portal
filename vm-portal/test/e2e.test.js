@@ -199,6 +199,9 @@ async function main() {
       await page.fill('#set-teams-url', 'https://127.0.0.1:1/workflows/test/invoke?sig=x');
       await page.click('#teams-save-btn');
       await page.waitForFunction(() => document.getElementById('teams-status').textContent === 'Auto-reply on ✓');
+      await page.click('#settings-back');
+      await page.waitForSelector('#workspace:not([hidden])');
+      assert.ok(!(await page.isVisible('#settings-panel')), 'settings closed');
     });
 
     await step('Execute → confirm old → new (the updater cannot stop the portal meanwhile) → both verified', async () => {

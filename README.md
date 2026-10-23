@@ -31,8 +31,8 @@ unpacked extensions and IT has to allow it. The same steps work in Chrome via `c
 each browser keeps its own login, settings and history.
 
 **After updating the files**, click **Reload** on the extension in `edge://extensions` (or the
-**Reload extension** button the popup offers), then press F5 on the Backoffice tab. The version under
-your name in the popup shows which version is running.
+**Reload extension** button the popup offers), then press F5 on the Backoffice tab. The bottom of
+**Settings** shows which version is running.
 
 ## First run
 
@@ -40,7 +40,8 @@ your name in the popup shows which version is running.
    PBKDF2 hash is stored, in this browser profile. To give a team the same logins instead, generate
    entries with `dev/tools/credential-hasher.html` and paste them into `scripts/auth-config.js`.
    Then reload the extension.
-2. **Settings (⚙):**
+2. **Settings** (gear icon, top right; it opens by itself until the Backoffice URL is set). **Back to tags**
+   or **Esc** returns to the tags:
    - **Backoffice URL** — for example `https://<your-backoffice-host>/backoffice/`. Click **Save & Grant access**
      and accept the browser's prompt. The extension only runs on that address.
    - **Backoffice role** — defaults to `WTCSG Backoffice User Role`.
@@ -58,16 +59,20 @@ your name in the popup shows which version is running.
      `code || description` line becomes its own row, and text such as "to change to" is removed.
    - Or type them: **Enter** moves to the next field, **+ Add tag** adds a row, **×** removes one.
    - Up to 25 tags per run. Invalid or duplicate rows are highlighted.
-4. Click **Execute N tags**. The tags run one after another in the same Backoffice tab, and each row
-   shows its live status.
-5. For each tag you're asked to confirm **Current in Hybris → New**:
+4. Click **Execute N tags**. The tags run one after another in the same Backoffice tab. The steps at the
+   top (**Tags → Processing → Review**) show where the run is, and each row shows its live status.
+5. For each tag you're asked to confirm **Current in Hybris → New**, next to a screenshot of Backoffice
+   before saving:
    - **Confirm & Save** — this tag only.
-   - **Confirm all (N)** — this tag and the rest, without asking again.
    - **Skip this tag** — nothing is changed for it; the run continues with the next tag.
+   - **Confirm all remaining (N)** — this tag and the rest, without asking again.
    If the popup is closed at that point, the toolbar badge shows **?**; click the icon to answer.
-6. When the run finishes, each row shows `old → new` and **✓ Verified**, **= Already set**,
-   **✗ Failed** (with the reason) or **Skipped**. **Retry failed** loads the unfinished tags back into
-   the form; **New run** starts over; **Open History** shows screenshots and full logs.
+6. When the run finishes, each row shows `old → new` and **Verified**, **Already set**, **Failed**
+   (with the reason) or **Skipped**. Click a row for its details: the full message and its screenshots.
+   (In the VM portal on a wide screen, the details sit beside the list.) **Retry failed** loads the
+   unfinished tags back into the form; **New run** starts over; **Open History** shows all runs.
+
+The **Activity log** under the tags is collapsed; it opens by itself when something fails.
 
 A problem with one tag (not found, save rejected, not reflected) doesn't stop the others. A problem
 with the environment (VPN down, session expired, a Backoffice dialog in the way, tab closed) stops the
@@ -153,7 +158,7 @@ If your Backoffice uses different captions:
 ```
 hybris-promotag-extension/   the extension (load this folder)
   manifest.json
-  popup/                     Portal UI: login view and execution view
+  popup/                     Portal UI: login, tags → processing → review, settings (also the VM portal's page)
   history/                   History page
   scripts/background.js      service worker: auth, settings, jobs, screenshots, history writes, Teams
   scripts/content.js         automation engine (runs in the Backoffice tab)
@@ -195,7 +200,9 @@ The suites cover:
   Promotions folder, a slow first tree filter, stale grid with retries, never reflected, already up to
   date, cancel, not found, ambiguous, save rejected, session expiry, network down, and blocked screenshots
 
-`dev\tests\ui\capture-ui.ps1` renders the popup views and the History page into `dev\tests\ui\out\`.
+`dev\tests\ui\capture-ui.ps1` renders every popup state (login, settings, tags, processing,
+confirmation, success, failure), the same states as the VM portal at 1366×768 and 1920×1080, and the
+History page into `dev\tests\ui\out\`.
 
 The VM portal has its own end-to-end test: in `vm-portal`, run `npm test`. A user opens a Teams link,
 creates a login, sets the Backoffice URL, runs two tags against the mock Backoffice, checks History and

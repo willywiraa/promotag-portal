@@ -51,8 +51,8 @@ The flow finds the newest post in the channel that contains the run's first tag 
 
 ## 2. Connect the portal (2 minutes)
 
-1. In the portal, open **⚙ Settings**, paste the HTTP URL into **Teams reply: workflow URL** and click
-   **Save & Grant access**. (Extension only: click **Allow** when the browser asks.)
+1. In the portal, open **Settings** (top right), paste the HTTP URL into **Teams reply → Workflow URL**
+   and click **Save & Grant access**. (Extension only: click **Allow** when the browser asks.)
 2. Click **Send test**. Within about a minute, a test reply appears under the latest Daily Alert.
    Delete it afterwards.
 

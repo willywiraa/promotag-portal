@@ -1,13 +1,5 @@
 /* The extension's popup and History pages, served as web pages by the VM portal. */
 .ext-only { display: none !important; }
 
-/* Portal page: the popup card, centred on a full page. */
-body:has(> main.card) {
-  width: auto;
-  min-height: 100vh;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding: 24px 16px;
-}
-body > main.card { width: 100%; max-width: 560px; }
+/* Portal page: the popup's layout fills the browser window (two columns from 1000px, see popup.css). */
+body:has(> main.app) { width: auto; min-height: 100vh; }
