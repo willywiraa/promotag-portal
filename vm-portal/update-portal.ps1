@@ -23,6 +23,14 @@ function Fail([string]$text) {
     exit 1
 }
 
+function Invoke-Git {
+    # Runs git in the repository and returns its output, including error lines; the exit code stays
+    # in $LASTEXITCODE. (Windows PowerShell would stop on git's error output under 'Stop'.)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { return @(& git -C $repo @args 2>&1 | ForEach-Object { "$_" }) } finally { $ErrorActionPreference = $previous }
+}
+
 function Start-Portal {
     if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
         Start-ScheduledTask -TaskName $taskName
@@ -63,8 +71,18 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Fail 'Git is not ins
 
 # 1. Anything new on GitHub?
 Say 'Checking GitHub for updates...'
-& git -C $repo fetch --quiet origin
-if ($LASTEXITCODE) { Fail 'Could not reach GitHub. Check the internet access and the GitHub sign-in on this VM.' }
+$out = Invoke-Git fetch --quiet origin
+if ($LASTEXITCODE -and ($out -join "`n") -match 'dubious ownership') {
+    # The folder belongs to another account (e.g. cloned as administrator). It holds this very
+    # script, so trusting it for the current account adds no risk.
+    Say 'Git does not trust this folder yet (it belongs to another account). Trusting it for your account...' 'Yellow'
+    & git config --global --add safe.directory ($repo -replace '\\', '/')
+    $out = Invoke-Git fetch --quiet origin
+}
+if ($LASTEXITCODE) {
+    $out | ForEach-Object { Say "  $_" 'DarkGray' }
+    Fail 'Could not get the updates from GitHub (Git''s message is above). Check the internet access and the GitHub token on this VM.'
+}
 $branch = (& git -C $repo rev-parse --abbrev-ref HEAD).Trim()
 $behind = [int](& git -C $repo rev-list --count "HEAD..origin/$branch")
 if ($behind -eq 0) {

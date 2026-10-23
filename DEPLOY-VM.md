@@ -48,7 +48,7 @@ and `git --version` should print a version.
    **Generate new token**. Name it `promotag VM` and pick an expiration date. Under **Repository
    access**, choose **Only select repositories** → `promotag-portal`. Under **Permissions**, set
    **Contents** to **Read-only**. Generate the token and copy it.
-2. On the VM, open a command prompt and run:
+2. On the VM, open a normal command prompt (not **Run as administrator**) and run:
 
    ```
    git clone https://github.com/<you>/promotag-portal.git C:\PromoTagPortal
@@ -175,7 +175,8 @@ changes on your laptop and push them.
 | **Network Error: Verify GlobalProtect VPN connection** | The VM can't reach Backoffice. Check that the Backoffice URL opens in Edge on the VM. |
 | Colleagues can't open the portal | Open the port (step 10), and use the VM name shown in the console window. |
 | **Teams reply not sent: Could not reach the Teams workflow** | The VM needs internet access to Power Automate. If it goes through a proxy, put IT's proxy address into the two `set` lines in `start-portal.cmd`. |
-| The update says **Could not reach GitHub** | Check the VM's internet access. If the token expired, create a new one (step 3). Then open **Credential Manager** → **Windows Credentials**, remove `git:https://github.com`, and run the update again; it asks for the new token. |
+| Git says **detected dubious ownership** | The folder was created as administrator. The update script fixes this by itself. For other Git commands, run once in a normal command prompt: `git config --global --add safe.directory C:/PromoTagPortal` |
+| The update says **Could not get the updates from GitHub** | Git's own message is shown above it. Check the VM's internet access. If the token expired, create a new one (step 3). Then open **Credential Manager** → **Windows Credentials**, remove `git:https://github.com`, and run the update again; it asks for the new token. |
 | The update says files were changed on this VM | Run the command it shows to undo them, then update again. Make changes on your laptop instead. |
 | The update says **A run is in progress** | Wait until the run has finished (or skip its confirmation), then update again. |
 | Port 8080 is already in use | In `start-portal.cmd`, set `PTAE_PORT` to another port, and use it in the links and the firewall rule. |
