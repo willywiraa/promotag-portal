@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Promo Tag History</title>
+  <link rel="stylesheet" href="history.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Promo Tag Amendment History</h1>
+      <p class="muted" id="whoami"></p>
+    </div>
+    <div class="usage muted" id="usage"></div>
+  </header>
+
+  <main>
+    <section class="gate card" id="gate" hidden>
+      <h2>Portal session required</h2>
+      <p>Your portal session has expired. Log in on the portal, then reload this page.</p>
+      <button type="button" class="btn btn-primary" id="gate-reload">Reload</button>
+    </section>
+
+    <section id="app" hidden>
+      <div class="toolbar card">
+        <input id="q" type="search" placeholder="Search tag code, value, operator…" spellcheck="false">
+        <select id="outcome" aria-label="Outcome">
+          <option value="">All outcomes</option>
+          <option value="success">Verified</option>
+          <option value="already-up-to-date">No change</option>
+          <option value="failed">Failed</option>
+          <option value="cancelled">Cancelled</option>
+          <option value="aborted">Stopped</option>
+          <option value="running">Running</option>
+        </select>
+        <label class="date">From <input id="from" type="date"></label>
+        <label class="date">To <input id="to" type="date"></label>
+        <span class="spacer"></span>
+        <button type="button" class="btn btn-secondary" id="export">Export CSV</button>
+        <button type="button" class="btn btn-secondary danger-text" id="purge">Delete older than…</button>
+      </div>
+
+      <div class="layout">
+        <div class="card list-card">
+          <table class="runs">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Tag</th>
+                <th>Old → New</th>
+                <th>Outcome</th>
+                <th>Operator</th>
+                <th>Evidence</th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+          <p class="empty muted" id="empty" hidden>No runs match these filters.</p>
+          <div class="more"><button type="button" class="btn btn-secondary" id="more" hidden>Load more</button></div>
+        </div>
+
+        <aside class="card detail" id="detail" hidden>
+          <div class="detail-head">
+            <h2 id="d-title"></h2>
+            <button type="button" class="btn btn-ghost" id="d-close" aria-label="Close details">✕</button>
+          </div>
+          <dl class="facts" id="d-facts"></dl>
+          <h3>Screenshots</h3>
+          <div class="shots" id="d-shots"></div>
+          <h3>Log</h3>
+          <ol class="console" id="d-logs"></ol>
+          <div class="detail-actions">
+            <button type="button" class="btn btn-secondary danger-text" id="d-delete">Delete this run</button>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <div class="lightbox" id="lightbox" hidden>
+    <img id="lb-img" alt="Screenshot">
+    <div class="lb-bar">
+      <span id="lb-caption"></span>
+      <a class="btn btn-primary" id="lb-download" download>Download</a>
+      <button type="button" class="btn btn-secondary" id="lb-close">Close</button>
+    </div>
+  </div>
+
+  <script src="../scripts/shared/auth-crypto.js"></script>
+  <script src="../scripts/shared/history-db.js"></script>
+  <script src="history.js"></script>
+</body>
+</html>

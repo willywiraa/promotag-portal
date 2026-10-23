@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Syntax check</title></head>
+<body>
+<script src="harness.js"></script>
+<script>
+  // Files that only run inside the extension (service worker, popup, history page) are not
+  // executed by the other suites; compile them here so a syntax error can't slip through.
+  const FILES = [
+    'scripts/background.js',
+    'scripts/content.js',
+    'scripts/selectors.js',
+    'scripts/zk-dom.js',
+    'scripts/zk-bridge.js',
+    'scripts/auth-config.js',
+    'scripts/shared/alert-parser.js',
+    'scripts/shared/batch.js',
+    'scripts/shared/teams.js',
+    'scripts/shared/auth-crypto.js',
+    'scripts/shared/history-db.js',
+    'popup/popup.js',
+    'history/history.js',
+  ];
+
+  function load(path) {
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', `../../hybris-promotag-extension/${path}`, false); // needs --allow-file-access-from-files
+    xhr.send();
+    return xhr.responseText;
+  }
+
+  for (const f of FILES) {
+    test(`compiles: ${f}`, () => {
+      const src = load(f);
+      assert(src && src.length > 50, 'file loaded');
+      new Function(src); // parse only — throws SyntaxError on invalid code
+    });
+  }
+
+  test('manifest.json is valid JSON with MV3 essentials', () => {
+    const m = JSON.parse(load('manifest.json'));
+    assertEqual(m.manifest_version, 3);
+    assertEqual(m.action.default_popup, 'popup/popup.html');
+    assertEqual(m.background.service_worker, 'scripts/background.js');
+    for (const p of ['storage', 'scripting', 'alarms', 'activeTab', 'unlimitedStorage']) assert(m.permissions.includes(p), `permission ${p}`);
+    assert(!m.host_permissions, 'no install-time host permissions');
+    assert(!m.content_scripts, 'content scripts are registered at runtime for the configured host');
+  });
+
+  runTests();
+</script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+# The VM's own data: settings (incl. the Teams workflow URL), logins, History, the Edge profile
+# with the Backoffice session. Never commit it.
+vm-portal/data/
+
+# Installed libraries: npm ci installs them from package-lock.json.
+node_modules/
+
+# Generated screenshots of the popup and History previews.
+dev/tests/ui/out/
+
+# Local editor and tool settings.
+.claude/
+.vscode/
+
+# Windows / macOS clutter.
+Thumbs.db
+Desktop.ini
+.DS_Store

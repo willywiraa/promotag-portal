@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Auth tests</title></head>
+<body>
+<script src="harness.js"></script>
+<script src="../../hybris-promotag-extension/scripts/shared/auth-crypto.js"></script>
+<script>
+  const A = PTAE.authCrypto;
+  const FAST = { iterations: 1000 }; // keep the suite fast; production uses 600k
+
+  test('hash + verify round trip', async () => {
+    const rec = await A.hashCredential('Ops.User', 'correct horse battery', FAST);
+    assertEqual(rec.algo, 'PBKDF2-SHA256');
+    assert(rec.salt && rec.hash, 'salt and hash present');
+    assert(await A.verifyCredential(rec, 'ops.user', 'correct horse battery'), 'user id is case-insensitive');
+  });
+
+  test('wrong password and wrong user are rejected', async () => {
+    const rec = await A.hashCredential('ops', 'secret-key-1', FAST);
+    assert(!(await A.verifyCredential(rec, 'ops', 'secret-key-2')), 'wrong password');
+    assert(!(await A.verifyCredential(rec, 'other', 'secret-key-1')), 'wrong user');
+  });
+
+  test('same password, different salts → different hashes', async () => {
+    const a = await A.hashCredential('ops', 'same-password', FAST);
+    const b = await A.hashCredential('ops', 'same-password', FAST);
+    assert(a.salt !== b.salt && a.hash !== b.hash, 'salted');
+  });
+
+  test('findAndVerify picks the matching record', async () => {
+    const recs = [await A.hashCredential('alice', 'alice-key-1', FAST), await A.hashCredential('bob', 'bob-key-12', FAST)];
+    const hit = await A.findAndVerify(recs, 'BOB', 'bob-key-12');
+    assertEqual(hit && hit.userId, 'bob');
+    assertEqual(await A.findAndVerify(recs, 'bob', 'alice-key-1'), null);
+  });
+
+  test('session validity and expiry', () => {
+    const now = 1_700_000_000_000;
+    const s = A.createSession('ops', 480, now);
+    assert(A.isSessionValid(s, now + 1000), 'fresh session is valid');
+    assert(!A.isSessionValid(s, now + 480 * 60000 + 1), 'expired after TTL');
+    assert(!A.isSessionValid(null, now), 'missing session');
+    assert(!A.isSessionValid({ token: 'short', expiresAt: now + 1e6 }, now), 'malformed token');
+  });
+
+  runTests({ realTimeIO: true });
+</script>
+</body>
+</html>

@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Parser tests</title></head>
+<body>
+<script src="harness.js"></script>
+<script src="../../hybris-promotag-extension/scripts/shared/alert-parser.js"></script>
+<script>
+  const { parseAlert, validateCode, validateDesc } = PTAE.parser;
+
+  test('PRD acceptance: "885 || 10% OFF $70"', () => {
+    const r = parseAlert('885 || 10% OFF $70');
+    assertEqual(r.code, '885', 'parsedCode');
+    assertEqual(r.desc, '10% OFF $70', 'parsedDesc');
+    assertEqual(r.error, null, 'error');
+    assert(r.hasDelimiter, 'hasDelimiter');
+  });
+
+  test('instruction phrase: "895 || to change to 10% OFF $70"', () => {
+    const r = parseAlert('895 || to change to 10% OFF $70');
+    assertEqual(r.code, '895');
+    assertEqual(r.desc, '10% OFF $70');
+    assertEqual(r.error, null);
+  });
+
+  test('old value + instruction: takes the text after the last "change to"', () => {
+    const r = parseAlert('895 || 10% OFF $80 to change to 10% OFF $70');
+    assertEqual(r.desc, '10% OFF $70');
+  });
+
+  test('instruction variants: "To Change To:", "change to -", "update to", "amend to"', () => {
+    assertEqual(parseAlert('895 || To Change To: 10% OFF $70').desc, '10% OFF $70');
+    assertEqual(parseAlert('895 || change to - 10% OFF $70').desc, '10% OFF $70');
+    assertEqual(parseAlert('895 || update to 10% OFF $70').desc, '10% OFF $70');
+    assertEqual(parseAlert('895 || amended to 10% OFF $70').desc, '10% OFF $70');
+  });
+
+  test('descriptions containing "to" are kept intact', () => {
+    assertEqual(parseAlert('901 || Up to 50% OFF').desc, 'Up to 50% OFF');
+    assertEqual(parseAlert('902 || Buy 2 to save $5').desc, 'Buy 2 to save $5');
+  });
+
+  test('whitespace, NBSP and zero-width characters are normalised', () => {
+    const r = parseAlert('  885 || 10% OFF $70​  ');
+    assertEqual(r.code, '885');
+    assertEqual(r.desc, '10% OFF $70');
+    assertEqual(parseAlert('885||10% OFF $70').desc, '10% OFF $70');
+  });
+
+  test('multi-line Teams paste: uses the line with "||"', () => {
+    const r = parseAlert('DAILY_ALERT\r\nPromotion tag mismatch\r\n895 || to change to 10% OFF $70\r\nPlease action');
+    assertEqual(r.code, '895');
+    assertEqual(r.desc, '10% OFF $70');
+  });
+
+  test('prefixed code: last token before "||"', () => {
+    assertEqual(parseAlert('Tag Code: 885 || 10% OFF $70').code, '885');
+    assertEqual(parseAlert('#885: || 10% OFF $70').code, '885');
+  });
+
+  test('symbols and single pipes inside the description are preserved', () => {
+    assertEqual(parseAlert('885 || BUY 1 | GET 1 FREE').desc, 'BUY 1 | GET 1 FREE');
+    assertEqual(parseAlert('885 || "10% OFF $70"').desc, '10% OFF $70');
+  });
+
+  test('extra "||" fields produce a warning and are ignored', () => {
+    const r = parseAlert('885 || 10% OFF $70 || 2026-10-05');
+    assertEqual(r.desc, '10% OFF $70');
+    assertEqual(r.warnings.length, 1);
+  });
+
+  test('bare code without "||"', () => {
+    const r = parseAlert('885');
+    assertEqual(r.code, '885');
+    assertEqual(r.desc, '');
+    assertEqual(r.hasDelimiter, false);
+    assertEqual(r.error, null);
+  });
+
+  test('missing parts are reported', () => {
+    assert(parseAlert('').error, 'empty text');
+    assert(parseAlert('|| 10% OFF $70').error, 'missing code');
+    assert(parseAlert('885 ||').error, 'missing description');
+    assert(parseAlert('885 || to change to').error, 'instruction without value');
+  });
+
+  // Text copied from the Teams "WTCSG Daily Alert" card (tabs between label and value).
+  const TEAMS_CARD = [
+    'WTCSG Daily Alert',
+    'Found 3 records in DAILY_ALERT table',
+    'From: alert.sender@example.com',
+    'Record 1',
+    'Alert_Datetime\tOct 6 2026 10:16AM',
+    'Alert_Message\t888 || 3 FOR $16.65',
+    'Record 2',
+    'Alert_Datetime\tOct 6 2026 10:16AM',
+    'Alert_Message\t889 || 3 FOR $23',
+    'Record 3',
+    'Alert_Datetime\tOct 6 2026 10:16AM',
+    'Alert_Message\t892 || to change to 6 FOR $29.50',
+    'ZHUO JIZONG (WTCSG - SENIOR IT MANAGER, ITD) used a Workflow template to send this card. Get template',
+  ].join('\r\n');
+
+  test('parseAlerts: whole Teams card → one item per record', () => {
+    const r = PTAE.parser.parseAlerts(TEAMS_CARD);
+    assertEqual(r.items.map((i) => `${i.code}=${i.desc}`).join(' | '), '888=3 FOR $16.65 | 889=3 FOR $23 | 892=6 FOR $29.50');
+    assertEqual(r.errors.length, 0);
+    assertEqual(r.items[0].line, 'Alert_Message\t888 || 3 FOR $16.65', 'original line kept for the history');
+  });
+
+  test('parseAlerts: plain list, duplicates keep the last value, bad lines reported', () => {
+    const r = PTAE.parser.parseAlerts('888 || A\n889 || B\n888 || C\n|| D\n');
+    assertEqual(r.items.map((i) => `${i.code}=${i.desc}`).join(','), '888=C,889=B');
+    assertEqual(r.warnings.length, 1, 'duplicate warned');
+    assertEqual(r.errors.length, 1, 'line without code reported');
+  });
+
+  test('parseAlerts: nothing to parse', () => {
+    const r = PTAE.parser.parseAlerts('Record 1\nAlert_Datetime Oct 6');
+    assertEqual(r.items.length, 0);
+  });
+
+  test('validators', () => {
+    assertEqual(validateCode('885'), null);
+    assert(validateCode(''), 'empty code');
+    assert(validateCode('88 5'), 'space in code');
+    assert(validateCode('88|5'), 'pipe in code');
+    assertEqual(validateDesc('10% OFF $70'), null);
+    assert(validateDesc('   '), 'blank description');
+  });
+
+  runTests();
+</script>
+</body>
+</html>

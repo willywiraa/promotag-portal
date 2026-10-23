@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>ZK input sync tests</title></head>
+<body>
+<div id="stage">
+  <input id="field" class="ye-input-text z-textbox" type="text" value="10% OFF $80">
+  <input id="search" class="ye-input-text z-textbox" type="text" value="">
+</div>
+<script src="harness.js"></script>
+<script>
+  // Stub of ZK's client engine (installed before the bridge, like the real page).
+  const seq = [];
+  const widgets = new Map();
+  function stubWidget(el) {
+    return {
+      widgetName: 'textbox',
+      parent: null,
+      listensOk: false,
+      setValue(v) { seq.push(`zk:setValue(${v})`); el.value = v; },
+      getInputNode() { return el; },
+      fireOnChange(opts) { seq.push(`zk:onChange(${el.value},toServer=${!!(opts && opts.toServer)})`); },
+      fire(name, data) { seq.push(`zk:${name}(${data && data.value != null ? data.value : ''})`); },
+      isListen(name) { return name === 'onOK' && this.listensOk; },
+    };
+  }
+  window.zk = { version: 'stub', Widget: { $: (el) => {
+    if (!el) return null;
+    if (!widgets.has(el)) widgets.set(el, stubWidget(el));
+    return widgets.get(el);
+  } } };
+  window.zAu = { processing: () => false };
+
+  for (const id of ['field', 'search']) {
+    const el = document.getElementById(id);
+    ['input', 'change', 'keydown', 'blur'].forEach((type) =>
+      el.addEventListener(type, (e) => seq.push(`dom:${type}${e.key ? '(' + e.key + ')' : ''}`)));
+  }
+</script>
+<script src="../../hybris-promotag-extension/scripts/zk-bridge.js"></script>
+<script src="../../hybris-promotag-extension/scripts/zk-dom.js"></script>
+<script>
+  const D = PTAE.dom;
+  const bridge = D.createBridgeClient();
+  const field = document.getElementById('field');
+  const search = document.getElementById('search');
+
+  test('bridge answers ping from the isolated-world client', async () => {
+    assert(await bridge.ready(), 'bridge ready');
+    const st = await bridge.call('status');
+    assertEqual(st.zk, true);
+    assertEqual(st.pending, 0);
+  });
+
+  test('setZkInputValue syncs through the ZK widget (setValue + onChange to server), no Enter by default', async () => {
+    seq.length = 0;
+    const res = await D.setZkInputValue(field, '10% OFF $70', { bridge });
+    assert(res.ok && res.synced, 'value set and synced');
+    assertEqual(field.value, '10% OFF $70');
+    assert(seq.includes('zk:setValue(10% OFF $70)'), 'widget setValue');
+    assert(seq.includes('zk:onChange(10% OFF $70,toServer=true)'), 'onChange sent to server');
+    assert(!seq.some((s) => s.startsWith('dom:keydown(Enter)')), 'no Enter on the description field');
+    assert(!field.hasAttribute('data-ptae-target'), 'target marker removed');
+  });
+
+  test('DOM events come first; Enter (when requested) only after onChange', async () => {
+    seq.length = 0;
+    await D.setZkInputValue(search, '895', { bridge, changing: true, enter: true });
+    const idx = (s) => seq.indexOf(s);
+    assert(idx('dom:input') >= 0 && idx('dom:change') >= 0, 'input/change dispatched');
+    assert(idx('dom:input') < idx('zk:setValue(895)'), 'DOM events before widget sync');
+    assert(idx('zk:onChanging(895)') >= 0, 'onChanging fired for filter-style fields');
+    assert(idx('zk:onChange(895,toServer=true)') < idx('dom:keydown(Enter)'), 'Enter after onChange');
+    assert(idx('dom:keydown(Enter)') < seq.lastIndexOf('dom:blur') || seq.includes('dom:blur') === false, 'blur last');
+  });
+
+  test('without the bridge the value is still set via DOM events (synced=false)', async () => {
+    seq.length = 0;
+    const res = await D.setZkInputValue(field, 'plain DOM', {});
+    assertEqual(res.ok, true);
+    assertEqual(res.synced, false);
+    assert(seq.includes('dom:input') && seq.includes('dom:change'), 'DOM events');
+  });
+
+  test('fireOk walks up to the widget listening for onOK', async () => {
+    const w = zk.Widget.$(search);
+    const parent = stubWidget(search);
+    parent.listensOk = true;
+    w.parent = parent;
+    seq.length = 0;
+    const token = D.markTarget(search);
+    const r = await bridge.call('fireOk', { token });
+    D.unmarkTarget(search);
+    assertEqual(r.fired, true);
+    assert(seq.includes('zk:onOK()'), 'onOK fired');
+  });
+
+  test('bridge observes AU traffic: counter + network error event', async () => {
+    const before = (await bridge.call('status')).auSeq;
+    const events = [];
+    const off = bridge.onEvent((e) => events.push(e));
+    await new Promise((resolve) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', 'no-such-dir/zkau');
+      xhr.addEventListener('loadend', () => setTimeout(resolve, 0));
+      xhr.send('cmd_0=dummy');
+    });
+    off();
+    const st = await bridge.call('status');
+    assertEqual(st.auSeq, before + 1, 'AU response counted');
+    assertEqual(st.pending, 0, 'nothing in flight');
+    assert(events.some((e) => e.type === 'au-error' && e.kind === 'network'), 'network error reported');
+  });
+
+  test('waitFor uses exponential backoff and times out with a labelled error', async () => {
+    const stamps = [];
+    const start = Date.now();
+    let err = null;
+    try {
+      await D.waitFor(() => { stamps.push(Date.now() - start); return false; }, { timeout: 2000, label: 'nothing' });
+    } catch (e) { err = e; }
+    assert(err instanceof D.TimeoutError, 'TimeoutError');
+    assertMatch(err.message, /2000 ms waiting for nothing/);
+    const gaps = stamps.slice(1).map((t, i) => t - stamps[i]);
+    assert(gaps[0] >= 290 && gaps[1] > gaps[0], `backoff grows: ${gaps.join(',')}`);
+  });
+
+  runTests();
+</script>
+</body>
+</html>

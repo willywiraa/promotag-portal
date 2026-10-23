@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Popup preview</title></head>
+<body style="margin:0;background:#F3F4F6">
+<script src="chrome-stub.js"></script>
+<script>
+  // Renders the real popup.html (with the chrome.* stub above). Needs --allow-file-access-from-files.
+  const base = '../../../hybris-promotag-extension/popup/';
+  const xhr = new XMLHttpRequest();
+  xhr.open('GET', base + 'popup.html', false);
+  xhr.send();
+  const body = xhr.responseText
+    .replace(/^[\s\S]*?<body[^>]*>/i, '')
+    .replace(/<\/body>[\s\S]*$/i, '')
+    .replace(/(src|href)="(?!https?:|#|data:)([^"]+)"/g, (m, attr, path) => `${attr}="${base}${path}"`);
+  document.write(`<link rel="stylesheet" href="${base}popup.css">` + body);
+</script>
+</body>
+</html>

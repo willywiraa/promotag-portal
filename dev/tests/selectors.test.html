@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Selector resilience tests</title></head>
+<body>
+<div id="stage"></div>
+<script src="harness.js"></script>
+<script src="fixtures/backoffice-fixtures.js"></script>
+<script src="../../hybris-promotag-extension/scripts/zk-dom.js"></script>
+<script src="../../hybris-promotag-extension/scripts/selectors.js"></script>
+<script>
+  const F = PTAEFixtures;
+  const R = PTAE.resolve;
+  const FALLBACK_ONLY = { tiers: ['fallback'] };
+
+  function shellCtx(extra) {
+    return Object.assign({
+      code: '895',
+      searchPanel: document.querySelector('.yw-advancedsearch'),
+      listbox: document.querySelector('.z-listbox.yw-listview'),
+    }, extra);
+  }
+
+  /** Resolves every shell key and checks it hit the expected fixture element. */
+  function checkShell(tier, opts) {
+    const ctx = shellCtx();
+    const expect = (key, hit, fxKey) => {
+      assert(hit, `${key} did not resolve`);
+      assertEqual(hit.el, F.fx(fxKey || key), `${key} resolved to the wrong element`);
+      if (tier) assertEqual(hit.tier, tier, `${key} tier`);
+    };
+    expect('treeFilter', R('treeFilter', ctx, opts));
+    expect('promotionTagNode', R('promotionTagNode', ctx, opts));
+    expect('searchModeToggle', R('searchModeToggle', ctx, opts));
+    const input = R('tagCodeInput', ctx, opts);
+    expect('tagCodeInput', input);
+    expect('resultRows', R('resultRows', ctx, opts), 'resultRow');
+    expect('descInput', R('descInput', ctx, opts));
+    expect('saveButton', R('saveButton', Object.assign(ctx, { descEl: F.fx('descInput') }), opts));
+    return input;
+  }
+
+  // --- registry audit (PRD §8.2) --------------------------------------------------------------
+  test('audit: every PRD step has a non-ID primary strategy and a validated fallback', () => {
+    const steps = Object.entries(PTAE.SELECTORS).filter(([, e]) => e.step);
+    assert(steps.length >= 10, 'expected the PRD steps 1–9 plus verification');
+    for (const [key, e] of steps) {
+      assert(e.primary.length >= 1, `${key}: no primary strategy`);
+      e.primary.forEach((s) => assert(!/^#[\w-]+$/.test(s.name), `${key}: primary "${s.name}" is a bare ID`));
+      assert(e.fallback.length >= 1, `${key}: no fallback`);
+      assertEqual(typeof e.validate, 'function', `${key}: fallback hits must be validated`);
+    }
+  });
+
+  // --- login & role -----------------------------------------------------------------------------
+  test('login: SSO link via primary, also after ID mutation', () => {
+    F.mount(F.loginPage());
+    let hit = R('ssoLink');
+    assertEqual(hit.tier, 'primary');
+    assertEqual(hit.el, F.fx('ssoLink'));
+    F.randomizeIds(document.getElementById('stage'));
+    hit = R('ssoLink');
+    assertEqual(hit.tier, 'primary');
+    assertEqual(hit.el, F.fx('ssoLink'));
+    assert(R('loginForm'), 'password form detected');
+  });
+
+  test('login: fallback #lQ3In resolves on original IDs', () => {
+    F.mount(F.loginPage());
+    const hit = R('ssoLink', {}, FALLBACK_ONLY);
+    assertEqual(hit && hit.strategy, '#lQ3In');
+  });
+
+  test('role: WTCSG row via aria-label, never a similar role', () => {
+    F.mount(F.rolePage());
+    const hit = R('roleRow');
+    assertEqual(hit.tier, 'primary');
+    assertEqual(hit.el, F.fx('roleRow'));
+    F.randomizeIds(document.getElementById('stage'));
+    assertEqual(R('roleRow').el, F.fx('roleRow'));
+    const btn = R('roleConfirmButton', { roleRowEl: F.fx('roleRow') });
+    assertEqual(btn && btn.el, F.fx('roleConfirmButton'));
+  });
+
+  test('role: fallback #rCbVtc2 resolves on original IDs', () => {
+    F.mount(F.rolePage());
+    assertEqual(R('roleRow', {}, FALLBACK_ONLY).strategy, '#rCbVtc2');
+  });
+
+  // --- workspace --------------------------------------------------------------------------------
+  test('shell: every step resolves via primary on the captured snippets', () => {
+    F.mount(F.shell());
+    checkShell('primary');
+    const ctx = shellCtx({ searchInput: F.fx('tagCodeInput') });
+    assertEqual(R('searchButton', ctx).el, F.fx('searchButton'));
+  });
+
+  test('shell: every step still resolves via primary after all IDs change', () => {
+    F.mount(F.shell());
+    F.randomizeIds(document.getElementById('stage'));
+    assert(!document.getElementById('s88Rl67'), 'ids were randomized');
+    checkShell('primary');
+  });
+
+  test('shell: fallback tier alone finds the sample IDs (validated)', () => {
+    F.mount(F.shell());
+    const ctx = shellCtx();
+    const ids = {
+      treeFilter: '#s88Ryb-real',
+      promotionTagNode: '#s88Rhr6',
+      searchModeToggle: '#s88Ryh',
+      tagCodeInput: '#s88Rl67',
+      descInput: '#s88R7ea',
+    };
+    for (const [key, id] of Object.entries(ids)) {
+      const hit = R(key, ctx, FALLBACK_ONLY);
+      assert(hit, `${key}: fallback did not resolve`);
+      assertEqual(hit.strategy, id, `${key}: fallback id`);
+    }
+    const rows = R('resultRows', ctx, FALLBACK_ONLY);
+    assertEqual(rows.el, F.fx('resultRow'), 'row from #s88R_da-cave');
+    const save = R('saveButton', ctx, FALLBACK_ONLY);
+    assertEqual(save.strategy, 'button.y-btn-primary');
+  });
+
+  test('shell: stale IDs on unrelated elements are rejected by the validators', () => {
+    F.mount(F.shell());
+    const stage = document.getElementById('stage');
+    F.randomizeIds(stage);
+    stage.insertAdjacentHTML('beforeend', `
+      <div id="decoys">
+        <span id="lQ3In">Login</span><div id="rCbVtc2">WTCSG Backoffice User Role</div>
+        <div id="s88Ryb-real">filter</div><span id="s88Rhr6">Promotion Tag Group</span>
+        <div id="s88Ryh">toggle</div><div id="s88Rl67">Tag Code</div>
+        <input id="s88R7ea" value="readonly" readonly><span id="s88Rsza">10% OFF $70</span>
+      </div>`);
+    const ctx = shellCtx({ row: F.fx('resultRow') });
+    for (const key of ['ssoLink', 'roleRow', 'treeFilter', 'promotionTagNode', 'searchModeToggle', 'tagCodeInput', 'descInput', 'verifyCell']) {
+      assertEqual(R(key, ctx, FALLBACK_ONLY), null, `${key} accepted a stale-ID decoy`);
+    }
+    checkShell('primary'); // the real elements are still found
+  });
+
+  test('description field: never the advanced-search "Tag" box, even without editor class names', () => {
+    F.mount(F.shell());
+    document.querySelectorAll('[class*="editorarea"]').forEach((el) => { el.className = 'plain'; });
+    const hit = R('descInput', shellCtx(), { tiers: ['primary'] });
+    assertEqual(hit && hit.el, F.fx('descInput'));
+  });
+
+  test('Tag Code search field: never the editor\'s Tag Code box', () => {
+    F.mount(F.shell());
+    const hit = R('tagCodeInput', {});
+    assertEqual(hit.el, F.fx('tagCodeInput'));
+    assert(hit.el !== F.fx('editorCode'), 'picked the editor field');
+  });
+
+  test('verify cell: remembered column (primary) and #s88Rsza (fallback)', () => {
+    F.mount(F.shell({ rows: [{ code: '895', desc: '10% OFF $70' }], verifyCell: true }));
+    const row = F.fx('resultRow');
+    const primary = R('verifyCell', shellCtx({ row, descColumn: 1 }));
+    assertEqual(primary.tier, 'primary');
+    assertEqual(primary.el, F.fx('verifyCell'));
+    const fallback = R('verifyCell', shellCtx({ row, descColumn: -1 }));
+    assertEqual(fallback.tier, 'fallback');
+    assertEqual(fallback.strategy, '#s88Rsza');
+    assertEqual(PTAE.dom.textOf(fallback.el), '10% OFF $70');
+  });
+
+  // --- row picking -------------------------------------------------------------------------------
+  test('pickRow: exact code wins over "contains" matches', () => {
+    F.mount(F.shell({ rows: [{ code: '1895', desc: 'A' }, { code: '895', desc: 'B' }, { code: '8950', desc: 'C' }] }));
+    const rows = R('resultRows').els;
+    const pick = PTAE.pickRow(rows, '895');
+    assertEqual(pick.row, rows[1]);
+    assert(pick.exact, 'exact match');
+    assertEqual(pick.codeIndex, 0);
+  });
+
+  test('pickRow: duplicates are ambiguous, no exact match is refused', () => {
+    F.mount(F.shell({ rows: [{ code: '895', desc: 'A' }, { code: '895', desc: 'B' }] }));
+    assertEqual(PTAE.pickRow(R('resultRows').els, '895').error, 'ambiguous');
+    F.mount(F.shell({ rows: [{ code: '1895', desc: 'A' }, { code: '8950', desc: 'B' }] }));
+    assertEqual(PTAE.pickRow(R('resultRows').els, '895').error, 'no-exact');
+  });
+
+  // --- low-level helpers -------------------------------------------------------------------------
+  test(':contains() replacement normalises NBSP and case', () => {
+    F.mount(F.rolePage());
+    const hits = PTAE.dom.findAll('tr.yw-selector-listitem', { text: { includes: 'wtcsg backoffice user role' } });
+    assertEqual(hits.length, 1);
+  });
+
+  test('a label without its own input never borrows the next field', () => {
+    F.mount(`<div class="box">
+      <div class="attr"><span class="z-label">Tag Code</span><span class="value">895</span></div>
+      <div class="attr"><span class="z-label">Tag</span><input class="z-textbox" value="10% OFF $80"></div></div>`);
+    const label = PTAE.dom.findLabelElements(['Tag Code'])[0];
+    assertEqual(PTAE.dom.inputForLabel(label, { stopLabels: ['Tag'] }), null);
+    assertEqual(PTAE.dom.textAfterLabel(label), '895');
+  });
+
+  runTests();
+</script>
+</body>
+</html>

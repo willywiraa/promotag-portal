@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>History DB tests</title></head>
+<body>
+<script src="harness.js"></script>
+<script src="../../hybris-promotag-extension/scripts/shared/history-db.js"></script>
+<script>
+  const DB = PTAE.createHistoryDb(`ptae-history-test-${Date.now()}`);
+  const day = 86400000;
+  const now = Date.now();
+
+  test('create run → append logs → attach screenshot → read back', async () => {
+    await DB.createRun({ id: 'run-a', startedAt: now, operator: 'ops', tagCode: '895', oldDesc: null, newDesc: '10% OFF $70' });
+    await DB.appendLog('run-a', { level: 'info', msg: 'Job started' });
+    await DB.appendLog('run-a', { level: 'ok', msg: 'Verified' });
+    await DB.updateRun('run-a', { oldDesc: '10% OFF $80', outcome: 'success', finishedAt: now + 5000, verify: { attempts: 2, observed: '10% OFF $70', matched: true } });
+    const blob = new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'image/webp' });
+    const shotId = await DB.addScreenshot({ runId: 'run-a', kind: 'after', blob, mime: 'image/webp', width: 1, height: 1 });
+
+    const run = await DB.getRun('run-a');
+    assertEqual(run.oldDesc, '10% OFF $80');
+    assertEqual(run.outcome, 'success');
+    assertEqual(run.screenshotIds.length, 1, 'screenshot linked to the run');
+    assertEqual(run.screenshotIds[0], shotId);
+    const logs = await DB.getLogs('run-a');
+    assertEqual(logs.map((l) => l.msg).join('|'), 'Job started|Verified');
+    const shots = await DB.getScreenshotsForRun('run-a');
+    assertEqual(shots.length, 1);
+    assertEqual(shots[0].blob.size, 4, 'blob stored intact');
+  });
+
+  test('listRuns: newest first, filters and paging', async () => {
+    await DB.createRun({ id: 'run-b', startedAt: now - 2 * day, operator: 'ops', tagCode: '885', oldDesc: '5% OFF', newDesc: '10% OFF $70', outcome: 'failed' });
+    await DB.createRun({ id: 'run-c', startedAt: now - 40 * day, operator: 'lee', tagCode: '777', oldDesc: 'A', newDesc: 'B', outcome: 'success' });
+    const all = await DB.listRuns({});
+    assertEqual(all.items.map((r) => r.id).join(','), 'run-a,run-b,run-c');
+    assertEqual((await DB.listRuns({ outcome: 'success' })).items.length, 2);
+    assertEqual((await DB.listRuns({ tagCode: '885' })).items[0].id, 'run-b');
+    assertEqual((await DB.listRuns({ text: 'lee' })).items[0].id, 'run-c');
+    assertEqual((await DB.listRuns({ from: now - 3 * day })).items.length, 2);
+    const page1 = await DB.listRuns({ limit: 2 });
+    assertEqual(page1.items.length, 2);
+    assert(page1.hasMore, 'hasMore');
+    const page2 = await DB.listRuns({ limit: 2, offset: 2 });
+    assertEqual(page2.items[0].id, 'run-c');
+    assert(!page2.hasMore, 'last page');
+  });
+
+  test('CSV export escapes quotes and neutralises formulas', () => {
+    const csv = DB.toCsv([{ id: 'r', tagCode: '895', oldDesc: 'Say "hi"', newDesc: '=HYPERLINK("x")', outcome: 'success', verify: { attempts: 1, observed: 'x' } }]);
+    const lines = csv.split('\r\n');
+    assertEqual(lines.length, 2);
+    assert(lines[1].includes('"Say ""hi"""'), 'quotes doubled');
+    assert(lines[1].includes(`"'=HYPERLINK(""x"")"`), 'formula neutralised');
+  });
+
+  test('deleteRun cascades to logs and screenshots; deleteRunsBefore prunes old runs', async () => {
+    await DB.deleteRun('run-a');
+    assertEqual(await DB.getRun('run-a'), null);
+    assertEqual((await DB.getLogs('run-a')).length, 0);
+    assertEqual((await DB.getScreenshotsForRun('run-a')).length, 0);
+    const removed = await DB.deleteRunsBefore(now - 30 * day);
+    assertEqual(removed, 1, 'run-c pruned');
+    const counts = await DB.counts();
+    assertEqual(counts.runs, 1);
+    assertEqual(counts.screenshots, 0);
+  });
+
+  runTests({ realTimeIO: true });
+</script>
+</body>
+</html>

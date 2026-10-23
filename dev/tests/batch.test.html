@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Batch state machine tests</title></head>
+<body>
+<script src="harness.js"></script>
+<script src="../../hybris-promotag-extension/scripts/shared/alert-parser.js"></script>
+<script src="../../hybris-promotag-extension/scripts/shared/batch.js"></script>
+<script>
+  const B = PTAE.batch;
+  const rows = (...pairs) => pairs.map(([code, newDesc]) => ({ code, newDesc }));
+  const make = (...pairs) => B.createBatch({ id: 'b1', items: B.normalizeItems(rows(...pairs), PTAE.parser).items, operator: 'willy', confirmBeforeSave: true });
+
+  test('normalizeItems: skips blank rows, reports invalid and duplicate rows by row number', () => {
+    const r = B.normalizeItems([
+      { code: '888', newDesc: '3 FOR $16.65' },
+      { code: '', newDesc: '' },
+      { code: '889', newDesc: '' },
+      { code: '888', newDesc: 'again' },
+      { code: '892', newDesc: '6 FOR $29.50', rawLine: 'Alert_Message 892 || 6 FOR $29.50' },
+    ], PTAE.parser);
+    assertEqual(r.items.map((i) => i.code).join(','), '888,892');
+    assertEqual(r.items[0].rawLine, '888 || 3 FOR $16.65', 'raw line defaults to "code || desc"');
+    assertEqual(r.items[1].rawLine, 'Alert_Message 892 || 6 FOR $29.50');
+    assertEqual(r.errors.length, 2);
+    assertMatch(r.errors[0], /^Row 3: New Tag Description is required/);
+    assertMatch(r.errors[1], /^Row 4: Tag 888 is listed more than once/);
+  });
+
+  test('normalizeItems: caps the number of tags per run', () => {
+    const many = Array.from({ length: B.MAX_ITEMS + 1 }, (_, i) => ({ code: String(1000 + i), newDesc: 'x' }));
+    assertMatch(B.normalizeItems(many, PTAE.parser).errors.join(), /At most 25 tags/);
+  });
+
+  test('runs tags in order and finishes when the last one is done', () => {
+    let b = make(['888', 'A'], ['889', 'B'], ['892', 'C']);
+    assertEqual(B.nextIndex(b), 0);
+    b = B.startItem(b, 0, { jobId: 'j1', runId: 'r1' });
+    assertEqual(b.items[0].status, 'running');
+    let r = B.applyResult(b, 0, { outcome: 'success', oldDesc: 'old A', verify: { attempts: 2 } });
+    assertEqual(r.action, 'next');
+    assertEqual(r.batch.items[0].status, 'succeeded');
+    assertEqual(r.batch.items[0].attempts, 2);
+    b = B.startItem(r.batch, 1, { jobId: 'j2', runId: 'r2' });
+    r = B.applyResult(b, 1, { outcome: 'already-up-to-date', oldDesc: 'B' });
+    assertEqual(r.batch.items[1].status, 'unchanged');
+    b = B.startItem(r.batch, 2, { jobId: 'j3', runId: 'r3' });
+    r = B.applyResult(b, 2, { outcome: 'failed', code: 'NOT_FOUND', message: 'Tag Code 892 not found in Hybris.' });
+    assertEqual(r.action, 'done', 'a tag-level failure does not stop the run');
+    assertEqual(r.batch.status, 'done');
+    const s = B.summary(r.batch);
+    assertEqual(`${s.succeeded}/${s.unchanged}/${s.failed}`, '1/1/1');
+  });
+
+  test('skipping one tag at the confirmation continues with the next', () => {
+    let b = B.startItem(make(['888', 'A'], ['889', 'B']), 0, { jobId: 'j1', runId: 'r1' });
+    const r = B.applyResult(b, 0, { outcome: 'cancelled', code: 'CANCELLED', message: 'Cancelled by operator — no changes made.' });
+    assertEqual(r.action, 'next');
+    assertEqual(r.batch.items[0].status, 'skipped');
+  });
+
+  test('environment failures (VPN, session, dialog, tab closed) stop the run and skip the rest', () => {
+    for (const code of ['NETWORK', 'SESSION', 'DIALOG', 'TAB_CLOSED', 'STALLED']) {
+      const b = B.startItem(make(['888', 'A'], ['889', 'B'], ['892', 'C']), 0, { jobId: 'j1', runId: 'r1' });
+      const r = B.applyResult(b, 0, { outcome: 'failed', code, message: 'Network Error: Verify GlobalProtect VPN connection.' });
+      assertEqual(r.action, 'stop', code);
+      assertEqual(r.batch.status, 'stopped', code);
+      assertEqual(r.batch.items[1].status, 'skipped', code);
+      assertMatch(r.batch.items[2].message, /^Not run: Network Error/);
+    }
+  });
+
+  test('Stop: current tag aborted, remaining tags skipped', () => {
+    let b = B.startItem(make(['888', 'A'], ['889', 'B']), 0, { jobId: 'j1', runId: 'r1' });
+    b = B.requestStop(b);
+    assertEqual(b.status, 'stopping');
+    const r = B.applyResult(b, 0, { outcome: 'aborted', code: 'ABORTED', message: 'Stopped by operator.' });
+    assertEqual(r.action, 'stop');
+    assertEqual(r.batch.items[0].status, 'stopped');
+    assertEqual(r.batch.items[1].status, 'skipped');
+    assert(!B.isActive(r.batch), 'no longer active');
+  });
+
+  test('Stop between two tags (nothing in flight)', () => {
+    const b = B.finalizeStop(B.requestStop(make(['888', 'A'], ['889', 'B'])), 'Stopped by operator.');
+    assertEqual(b.status, 'stopped');
+    assertEqual(b.items.map((i) => i.status).join(','), 'skipped,skipped');
+  });
+
+  test('awaiting confirmation is shown per item and finished items are never overwritten', () => {
+    let b = B.startItem(make(['888', 'A']), 0, { jobId: 'j1', runId: 'r1' });
+    b = B.markItem(b, 0, 'awaiting_confirm');
+    assertEqual(b.items[0].status, 'awaiting_confirm');
+    assertEqual(B.summary(b).running, 1);
+    const done = B.applyResult(b, 0, { outcome: 'success' }).batch;
+    assertEqual(B.markItem(done, 0, 'running').items[0].status, 'succeeded');
+  });
+
+  test('applyResult keeps the failure code (environment failures are not posted to Teams)', () => {
+    const b = B.startItem(make(['888', 'A']), 0, { jobId: 'j1', runId: 'r1' });
+    assertEqual(B.applyResult(b, 0, { outcome: 'failed', code: 'NETWORK', message: 'VPN' }).batch.items[0].errorCode, 'NETWORK');
+    assertEqual(make(['889', 'B']).items[0].errorCode, null);
+  });
+
+  runTests();
+</script>
+</body>
+</html>

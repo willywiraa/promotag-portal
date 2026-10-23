@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>History preview</title></head>
+<body>
+<script src="chrome-stub.js"></script>
+<script>
+  // Under --virtual-time-budget, keep the page busy for a while so real IndexedDB work finishes.
+  (function keepAlive(n) {
+    if (n <= 0) return;
+    let x = 0;
+    for (let i = 0; i < 300000; i++) x += i % 7;
+    window.__keepAliveSink = x;
+    setTimeout(() => keepAlive(n - 1), 1);
+  })(1200);
+
+  const base = '../../../hybris-promotag-extension/history/';
+  const xhr = new XMLHttpRequest();
+  xhr.open('GET', base + 'history.html', false); // needs --allow-file-access-from-files
+  xhr.send();
+  const body = xhr.responseText
+    .replace(/^[\s\S]*?<body[^>]*>/i, '')
+    .replace(/<\/body>[\s\S]*$/i, '')
+    .replace(/<script[^>]*history\.js"[^>]*><\/script>/i, '') // started after seeding
+    .replace(/(src|href)="(?!https?:|#|data:)([^"]+)"/g, (m, attr, path) => `${attr}="${base}${path}"`);
+  document.write(`<link rel="stylesheet" href="${base}history.css">` + body);
+</script>
+<script>
+  function fakeShot(rowText, color) {
+    const c = document.createElement('canvas');
+    c.width = 1280;
+    c.height = 720;
+    const g = c.getContext('2d');
+    g.fillStyle = '#EEF1F5'; g.fillRect(0, 0, 1280, 720);
+    g.fillStyle = '#1F2A44'; g.fillRect(0, 0, 1280, 48);
+    g.fillStyle = '#FFFFFF'; g.font = 'bold 18px Segoe UI'; g.fillText('SAP Commerce Backoffice (preview)', 20, 31);
+    g.fillRect(16, 64, 260, 640); g.fillRect(292, 64, 972, 300); g.fillRect(292, 380, 972, 324);
+    g.fillStyle = '#334155'; g.font = '15px Segoe UI';
+    ['Promotions', 'Promotion Tag', 'Promotion Tag Group'].forEach((t, i) => g.fillText(t, 32, 100 + i * 28));
+    g.fillText('Tag Code', 312, 96); g.fillText('Tag', 520, 96);
+    g.fillStyle = color + '33'; g.fillRect(300, 112, 956, 34);
+    g.strokeStyle = color; g.lineWidth = 3; g.strokeRect(300, 112, 956, 34);
+    g.fillStyle = '#111827'; g.fillText('895', 312, 135); g.fillText(rowText, 520, 135);
+    g.fillStyle = '#334155'; g.fillText('Essential', 312, 412); g.fillText('Tag Code   895', 312, 452); g.fillText(`Tag   ${rowText}`, 312, 492);
+    return new Promise((resolve) => c.toBlob(resolve, 'image/webp', 0.9));
+  }
+
+  (async () => {
+    const DB = PTAE.historyDb;
+    await DB.deleteRunsBefore(Date.now() + 1e12); // fresh demo data on every capture
+    const now = Date.now();
+    const runs = [
+      { id: 'run-demo-1', startedAt: now - 60e3, finishedAt: now - 20e3, tagCode: '895', oldDesc: '10% OFF $80', newDesc: '10% OFF $70', outcome: 'success',
+        verify: { attempts: 1, observed: '10% OFF $70', matched: true }, message: 'Tag 895: "10% OFF $80" → "10% OFF $70" — verified (attempt 1).',
+        rawAlert: '895 || to change to 10% OFF $70', shots: [['before', '10% OFF $80', '#F59E0B'], ['after', '10% OFF $70', '#16A34A']] },
+      { id: 'run-demo-2', startedAt: now - 3600e3, finishedAt: now - 3590e3, tagCode: '885', oldDesc: '10% OFF $70', newDesc: '10% OFF $70', outcome: 'already-up-to-date',
+        message: 'Tag 885 already shows "10% OFF $70" — nothing changed.', rawAlert: '885 || 10% OFF $70', shots: [['after', '10% OFF $70', '#16A34A']] },
+      { id: 'run-demo-3', startedAt: now - 7200e3, finishedAt: now - 7180e3, tagCode: '901', oldDesc: '5% OFF', newDesc: 'Up to 50% OFF', outcome: 'failed',
+        verify: { attempts: 4, observed: '5% OFF', matched: false }, message: 'Change not reflected after 3 retries — grid shows "5% OFF" (expected "Up to 50% OFF").',
+        rawAlert: '901 || Up to 50% OFF', shots: [['before', '5% OFF', '#F59E0B'], ['after', '5% OFF', '#DC2626']] },
+      { id: 'run-demo-4', startedAt: now - 86400e3, finishedAt: now - 86390e3, tagCode: '777', oldDesc: null, newDesc: 'BUY 1 GET 1', outcome: 'failed',
+        message: 'Tag Code 777 not found in Hybris.', rawAlert: '777 || BUY 1 GET 1', shots: [] },
+      { id: 'run-demo-5', startedAt: now - 2 * 86400e3, finishedAt: now - 2 * 86400e3 + 30e3, tagCode: '612', oldDesc: '$5 OFF', newDesc: '$8 OFF', outcome: 'cancelled',
+        message: 'Cancelled by operator — no changes made.', rawAlert: '612 || to change to $8 OFF', shots: [['before', '$5 OFF', '#F59E0B']] },
+    ];
+    for (const r of runs) {
+      const { shots, ...run } = r;
+      await DB.createRun(Object.assign({ operator: 'ops.watson', backofficeUrl: 'https://backoffice.example.com/backoffice/' }, run));
+      for (const [kind, text, color] of shots) {
+        await DB.addScreenshot({ runId: r.id, kind, blob: await fakeShot(text, color), mime: 'image/webp', width: 1280, height: 720 });
+      }
+    }
+    const lines = [
+      ['info', 'Job started by ops.watson: Tag 895 → "10% OFF $70"'], ['info', '[2/4] Opening Promotion Tag…'],
+      ['info', 'Result row found (primary, exact Tag Code match).'], ['info', 'Current description in Hybris: "10% OFF $80"'],
+      ['info', 'Screenshot saved (before).'], ['ok', 'Operator confirmed the change.'], ['ok', 'Backoffice: "Item 895 saved"'],
+      ['info', 'Verifying: searching Tag Code 895 again (attempt 1/4)…'], ['ok', 'Verified in the result grid: "10% OFF $70" (attempt 1/4).'],
+      ['info', 'Screenshot saved (after).'], ['ok', 'Tag 895: "10% OFF $80" → "10% OFF $70" — verified (attempt 1).'],
+    ];
+    for (const [i, [level, msg]] of lines.entries()) await DB.appendLog('run-demo-1', { t: now - 60e3 + i * 3500, level, msg });
+
+    location.hash = '#run=run-demo-1';
+    const s = document.createElement('script');
+    s.src = base + 'history.js';
+    document.body.append(s);
+  })();
+</script>
+</body>
+</html>

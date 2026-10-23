@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Teams integration tests</title></head>
+<body>
+<script src="harness.js"></script>
+<script src="../../hybris-promotag-extension/scripts/shared/alert-parser.js"></script>
+<script src="../../hybris-promotag-extension/scripts/shared/batch.js"></script>
+<script src="../../hybris-promotag-extension/scripts/shared/teams.js"></script>
+<script>
+  const T = PTAE.teams;
+  const B = PTAE.batch;
+  const BASE = 'https://backoffice.example.com/backoffice/';
+
+  /** A batch run to the end: each arg is [code, newDesc, outcome?, resultExtra?]; no outcome = never ran. */
+  function finished(...rows) {
+    let b = B.createBatch({
+      id: 'b1', operator: 'willy', confirmBeforeSave: true,
+      items: B.normalizeItems(rows.map(([code, newDesc]) => ({ code, newDesc })), PTAE.parser).items,
+    });
+    rows.forEach(([, , outcome, extra], i) => {
+      if (!outcome || b.items[i].status !== 'pending') return;
+      b = B.startItem(b, i, { jobId: `j${i}`, runId: `r${i}` });
+      b = B.applyResult(b, i, Object.assign({ outcome }, extra)).batch;
+    });
+    return b;
+  }
+
+  test('link: built, read back and parsed into tags (documented example)', () => {
+    const text = '956 || $10 OFF $99\n959 || $30 OFF $199';
+    const url = T.importLink(BASE, text);
+    assertEqual(url, `${BASE}#promotags=956%20%7C%7C%20%2410%20OFF%20%2499%0A959%20%7C%7C%20%2430%20OFF%20%24199`);
+    const link = T.parseImportLink(url);
+    assertEqual(link.text, text);
+    assertEqual(link.cleanUrl, BASE, 'address bar without the tags');
+    const items = PTAE.parser.parseAlerts(link.text).items;
+    assertEqual(items.map((i) => `${i.code}=${i.desc}`).join(';'), '956=$10 OFF $99;959=$30 OFF $199');
+  });
+
+  test('link: form-encoded or unencoded text works; other fragments are ignored', () => {
+    assertEqual(T.parseImportLink(`${BASE}#promotags=956+%7C%7C+%2410+OFF+%2499`).text, '956 || $10 OFF $99');
+    assertEqual(T.parseImportLink(`${BASE}#promotags=956 || $10 OFF $99`).text, '956 || $10 OFF $99');
+    assertEqual(T.parseImportLink(BASE), null);
+    assertEqual(T.parseImportLink(`${BASE}#open=1`), null);
+    assertEqual(T.parseImportLink(`${BASE}#promotags=`), null);
+    assertEqual(T.parseImportLink(''), null);
+  });
+
+  test('link: whole card text with labels and "to change to" still yields the tags', () => {
+    const card = 'Record 1\nAlert_Datetime Oct 22 2026 11:16AM\nAlert_Message 956 || to change to $10 OFF $99';
+    const items = PTAE.parser.parseAlerts(T.parseImportLink(T.importLink(BASE, card)).text).items;
+    assertEqual(items.length, 1);
+    assertEqual(`${items[0].code}=${items[0].desc}`, '956=$10 OFF $99');
+  });
+
+  test('webhook URL: https only, kept verbatim, permission for its host', () => {
+    const url = 'https://default1a2b.c3.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/abc/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=Ab_cD-12';
+    const hook = T.parseWebhookUrl(`  ${url} `);
+    assertEqual(hook.url, url, 'signature untouched');
+    assertEqual(hook.permission, 'https://default1a2b.c3.environment.api.powerplatform.com/*');
+    assertEqual(T.parseWebhookUrl('http://example.com/x'), null, 'http');
+    assertEqual(T.parseWebhookUrl('https://teams.microsoft.com/l/channel/19%3Aabc%40thread.tacv2/Daily?groupId=x'), null, 'Teams link');
+    assertEqual(T.parseWebhookUrl('https://teams.cloud.microsoft/l/channel/x'), null, 'new Teams link');
+    assertEqual(T.parseWebhookUrl('not a url'), null);
+    assertEqual(T.parseWebhookUrl(''), null);
+  });
+
+  test('shouldPost: only when a tag reached Hybris', () => {
+    assert(T.shouldPost(finished(['956', 'A', 'success'])), 'verified');
+    assert(T.shouldPost(finished(['956', 'A', 'already-up-to-date'])), 'already set');
+    assert(T.shouldPost(finished(['956', 'A', 'failed', { code: 'NOT_FOUND', message: 'Tag Code 956 not found in Hybris.' }])), 'tag problem');
+    assert(!T.shouldPost(finished(['956', 'A', 'failed', { code: 'NETWORK', message: 'VPN' }], ['959', 'B'])), 'VPN down is not news');
+    assert(!T.shouldPost(finished(['956', 'A', 'cancelled'])), 'skipped at confirm');
+    assert(!T.shouldPost(null));
+  });
+
+  test('matchText: first tag code with its delimiter', () => {
+    assertEqual(T.matchText(finished(['956', 'A', 'success'], ['959', 'B', 'success'])), '956 ||');
+  });
+
+  test('reply: one short line per tag, no technical details, no screenshots', () => {
+    const b = finished(
+      ['956', '$10 OFF $99', 'failed', { code: 'TIMEOUT', message: 'Timed out after 8000 ms waiting for Promotion Tag tree node. Visible labels: Marketing' }],
+      ['959', '$30 OFF $199', 'cancelled', { oldDesc: '2 FOR $82.00', message: 'Confirmation timed out — no changes made.' }],
+      ['952', '3 FOR $89', 'success', { oldDesc: '2 FOR $79.50', verify: { attempts: 1 } }],
+      ['957', '3 FOR $119', 'already-up-to-date', { oldDesc: '3 FOR $119' }]
+    );
+    const msg = T.buildReply({ batch: b });
+    assertEqual(msg.body.contentType, 'html');
+    assertEqual(msg.body.content, [
+      '<p><b>956</b>&emsp;$10 OFF $99 ❌ failed',
+      '<b>959</b>&emsp;2 FOR $82.00 → $30 OFF $199 ⏭ skipped',
+      '<b>952</b>&emsp;2 FOR $79.50 → 3 FOR $89 ✅',
+      '<b>957</b>&emsp;3 FOR $119 ✅ already set</p>',
+    ].join('<br>'));
+    assertEqual(msg.hostedContents, undefined, 'screenshots stay in History');
+  });
+
+  test('reply: a stopped run lists the tags that did not run', () => {
+    const b = finished(['956', 'A', 'success', { oldDesc: 'B' }], ['959', 'C', 'aborted', { code: 'ABORTED', message: 'Stopped by operator.' }], ['960', 'D']);
+    assertEqual(b.items.map((it) => T.replyText(it)).join(' | '), 'B → A ✅ | C ⏭ not run | D ⏭ skipped');
+  });
+
+  test('reply: text from Hybris is escaped', () => {
+    const html = T.buildReply({ batch: finished(['<b>9</b>', 'A & B', 'success', { oldDesc: '"x"' }]) }).body.content;
+    assertEqual(html, '<p><b>&lt;b&gt;9&lt;/b&gt;</b>&emsp;&quot;x&quot; → A &amp; B ✅</p>');
+  });
+
+  test('payloads: what the flow reads (match + Graph message)', () => {
+    const p = T.buildPayload({ batch: finished(['956', 'A', 'success', { oldDesc: 'B' }]) });
+    assertEqual(p.match, '956 ||');
+    assertEqual(p.version, 1);
+    assertEqual(p.message.body.content, '<p><b>956</b>&emsp;B → A ✅</p>');
+    const t = T.buildTestPayload({ operator: 'willy' });
+    assertEqual(t.match, 'Daily Alert', 'test replies under the latest Daily Alert');
+    assertMatch(t.message.body.content, /test reply from willy/);
+  });
+
+  runTests();
+</script>
+</body>
+</html>

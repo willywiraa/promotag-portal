@@ -1,0 +1,17 @@
+{
+  "name": "promo-tag-portal-vm",
+  "version": "1.2.1",
+  "private": true,
+  "description": "Promo Tag Portal for a Windows VM: serves the portal to the network and runs the Backoffice automation in Microsoft Edge.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --use-system-ca server.js",
+    "test": "node --use-system-ca test/e2e.test.js"
+  },
+  "engines": {
+    "node": ">=22.15"
+  },
+  "dependencies": {
+    "playwright-core": "1.64.0"
+  }
+}

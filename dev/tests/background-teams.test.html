@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Service worker: Teams reply and alert links</title></head>
+<body>
+<script src="harness.js"></script>
+<script>
+  /*
+   * Loads the real service worker (background.js) into this page with a chrome.* stub and a fake
+   * workflow URL, then checks the Teams reply and the "Open in Promo Tag Portal" links.
+   */
+
+  // --- chrome.* stub good enough to load the real service worker in a page ---------------------------
+  const listeners = {};
+  const ev = (name) => ({ addListener: (fn) => { (listeners[name] = listeners[name] || []).push(fn); } });
+  const store = { local: {}, session: {} };
+  const clone = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
+  const area = (name) => ({
+    async get(key) {
+      const keys = key == null ? Object.keys(store[name]) : Array.isArray(key) ? key : [key];
+      const o = {};
+      keys.forEach((k) => { if (k in store[name]) o[k] = clone(store[name][k]); });
+      return o;
+    },
+    async set(obj) { Object.assign(store[name], clone(obj)); },
+    async remove(keys) { (Array.isArray(keys) ? keys : [keys]).forEach((k) => delete store[name][k]); },
+  });
+  const calls = { tabsUpdate: [], openPopup: 0, badge: [], hooks: [] };
+  let hookStatus = 202;
+  let permitted = true;
+  window.chrome = {
+    runtime: { id: 'test', getURL: (p) => `chrome-extension://test/${p}`, onMessage: ev('onMessage'), onInstalled: ev('onInstalled'), onStartup: ev('onStartup') },
+    storage: { local: area('local'), session: area('session') },
+    alarms: { create: async () => {}, clear: async () => {}, onAlarm: ev('onAlarm') },
+    tabs: {
+      onRemoved: ev('tabs.onRemoved'), onUpdated: ev('tabs.onUpdated'), onCreated: ev('tabs.onCreated'),
+      update: async (id, p) => { calls.tabsUpdate.push([id, p.url]); },
+      query: async () => [], get: async () => ({}), sendMessage: async () => null,
+    },
+    action: {
+      setBadgeText: async (o) => { calls.badge.push(o.text); },
+      setBadgeBackgroundColor: async () => {},
+      openPopup: async () => { calls.openPopup++; },
+    },
+    permissions: { contains: async () => permitted, request: async () => true, onAdded: ev('p.onAdded'), onRemoved: ev('p.onRemoved') },
+    scripting: { getRegisteredContentScripts: async () => [], unregisterContentScripts: async () => {}, registerContentScripts: async () => {}, executeScript: async () => [] },
+    windows: { get: async () => ({}), update: async () => {} },
+  };
+  window.importScripts = () => {}; // the shared scripts are loaded below with <script> tags
+
+  const realFetch = window.fetch.bind(window);
+  window.fetch = async (url, opts) => {
+    if (String(url).startsWith('https://hook.example.com/')) {
+      calls.hooks.push({ url, body: JSON.parse(opts.body) });
+      return new Response(null, { status: hookStatus });
+    }
+    if (String(url).startsWith('chrome-extension://')) throw new TypeError('no extension files in this page');
+    return realFetch(url, opts);
+  };
+</script>
+<script src="../../hybris-promotag-extension/scripts/shared/auth-crypto.js"></script>
+<script src="../../hybris-promotag-extension/scripts/shared/alert-parser.js"></script>
+<script src="../../hybris-promotag-extension/scripts/shared/batch.js"></script>
+<script src="../../hybris-promotag-extension/scripts/shared/teams.js"></script>
+<script src="../../hybris-promotag-extension/scripts/shared/history-db.js"></script>
+<script src="../../hybris-promotag-extension/scripts/auth-config.js"></script>
+<script src="../../hybris-promotag-extension/scripts/background.js"></script>
+<script>
+  const BO = 'https://backoffice.example.com/backoffice/';
+  const HOOK = 'https://hook.example.com/workflows/abc/triggers/manual/paths/invoke?api-version=1&sig=s3cr3t';
+  const SENDER = { id: 'test', url: 'chrome-extension://test/popup/popup.html' };
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  const waitFor = async (fn, ms = 20000) => {
+    const end = performance.now() + ms;
+    while (performance.now() < end) {
+      const v = await fn();
+      if (v) return v;
+      await pause(20);
+    }
+    throw new Error('timed out waiting');
+  };
+
+  /** Session + settings + a finished batch. */
+  async function prepare({ outcomes, webhook = HOOK }) {
+    store.local = { settings: { baseUrl: BO, roleName: 'WTCSG Backoffice User Role', confirmBeforeSave: true, teamsWebhookUrl: webhook } };
+    store.local.portalSession = await PTAE.authCrypto.createSession('willy', 60);
+    store.session = {};
+    calls.hooks = [];
+    let b = PTAE.batch.createBatch({
+      id: `b-${Math.random()}`, operator: 'willy', confirmBeforeSave: true,
+      items: PTAE.batch.normalizeItems(outcomes.map(([code, newDesc]) => ({ code, newDesc })), PTAE.parser).items,
+    });
+    for (let i = 0; i < outcomes.length; i++) {
+      const [, , outcome, extra] = outcomes[i];
+      if (!outcome || b.items[i].status !== 'pending') continue;
+      b = PTAE.batch.startItem(b, i, { jobId: `j${i}`, runId: `run-${i}` });
+      b = PTAE.batch.applyResult(b, i, Object.assign({ outcome }, extra)).batch;
+    }
+    store.session.batch = clone(b);
+    return b;
+  }
+
+  const teamsState = async () => ((await chrome.storage.session.get('batch')).batch || {}).teams;
+
+  test('run finishes → one short reply, one line per tag', async () => {
+    hookStatus = 202;
+    await prepare({ outcomes: [['956', '$10 OFF $99', 'success', { oldDesc: '$10 OFF $80', verify: { attempts: 1 } }], ['959', '$30 OFF $199', 'already-up-to-date', { oldDesc: '$30 OFF $199' }]] });
+    await completeBatch();
+    const t = await waitFor(async () => { const s = await teamsState(); return s && s.status !== 'sending' && s; });
+    assertEqual(t.status, 'sent', JSON.stringify(t));
+    assertEqual(calls.hooks.length, 1, 'posted once');
+    const { url, body } = calls.hooks[0];
+    assertEqual(url, HOOK, 'signed URL used verbatim');
+    assertEqual(body.match, '956 ||');
+    assertEqual(body.message.body.content, '<p><b>956</b>&emsp;$10 OFF $80 → $10 OFF $99 ✅<br><b>959</b>&emsp;$30 OFF $199 ✅ already set</p>');
+    assertEqual(body.message.hostedContents, undefined, 'no screenshots');
+    assert((await chrome.storage.session.get('logs')).logs.some((l) => /Results sent to Teams/.test(l.msg)), 'logged');
+    await completeBatch();
+    await pause(200);
+    assertEqual(calls.hooks.length, 1, 'never posted twice for one run');
+  });
+
+  test('workflow refuses → failed with a fix-it message; Retry then sends', async () => {
+    hookStatus = 403;
+    await prepare({ outcomes: [['956', '$10 OFF $99', 'success', { oldDesc: '$10 OFF $80' }]] });
+    await completeBatch();
+    const t = await waitFor(async () => { const s = await teamsState(); return s && s.status !== 'sending' && s; });
+    assertEqual(t.status, 'failed');
+    assertMatch(t.error, /Anyone/);
+    hookStatus = 202;
+    const resp = await handleUi({ type: 'UI_TEAMS_RETRY' }, SENDER);
+    assertEqual(resp.ok, true, JSON.stringify(resp));
+    assertEqual((await teamsState()).status, 'sent');
+    assertEqual(calls.hooks.length, 2);
+  });
+
+  test('nothing posted for VPN failures, or when Teams is not set up, or without access', async () => {
+    await prepare({ outcomes: [['956', 'A', 'failed', { code: 'NETWORK', message: 'Network Error' }], ['959', 'B']] });
+    await completeBatch();
+    await pause(300);
+    assertEqual(calls.hooks.length, 0, 'VPN failure');
+    assertEqual(await teamsState(), undefined);
+
+    await prepare({ outcomes: [['956', 'A', 'success', { oldDesc: 'B' }]], webhook: '' });
+    await completeBatch();
+    await pause(300);
+    assertEqual(calls.hooks.length, 0, 'not configured');
+
+    permitted = false;
+    await prepare({ outcomes: [['956', 'A', 'success', { oldDesc: 'B' }]] });
+    await completeBatch();
+    const t = await waitFor(async () => { const s = await teamsState(); return s && s.status !== 'sending' && s; });
+    permitted = true;
+    assertEqual(t.status, 'failed');
+    assertMatch(t.error, /Grant access/);
+    assertEqual(calls.hooks.length, 0);
+  });
+
+  test('test button: posts a test reply under the latest Daily Alert', async () => {
+    hookStatus = 202;
+    await prepare({ outcomes: [['956', 'A']] });
+    const resp = await handleUi({ type: 'UI_TEAMS_TEST' }, SENDER);
+    assertEqual(resp.ok, true, JSON.stringify(resp));
+    assertEqual(calls.hooks.length, 1);
+    assertEqual(calls.hooks[0].body.match, 'Daily Alert');
+    assertMatch(calls.hooks[0].body.message.body.content, /test reply/);
+  });
+
+  test('settings: rejects a Teams link, keeps a flow URL, reports access', async () => {
+    await prepare({ outcomes: [['956', 'A']] });
+    const bad = await handleUi({ type: 'UI_SETTINGS_SAVE', settings: { teamsWebhookUrl: 'https://teams.microsoft.com/l/channel/19%3Ax%40thread.tacv2/D?groupId=1' } }, SENDER).catch((e) => ({ ok: false, error: e.message }));
+    assertEqual(bad.ok, false);
+    assertMatch(bad.error, /not a Teams link/);
+    const ok = await handleUi({ type: 'UI_SETTINGS_SAVE', settings: { teamsWebhookUrl: ` ${HOOK} ` } }, SENDER);
+    assertEqual(ok.settings.teamsWebhookUrl, HOOK);
+    assertEqual(ok.access.teams, 'on');
+    const off = await handleUi({ type: 'UI_SETTINGS_SAVE', settings: { teamsWebhookUrl: '' } }, SENDER);
+    assertEqual(off.access.teams, 'off');
+  });
+
+  test('alert link: tags kept for the popup, address bar cleaned, popup opened once', async () => {
+    await prepare({ outcomes: [['956', 'A']] });
+    store.session = {};
+    calls.tabsUpdate = [];
+    calls.openPopup = 0;
+    const url = `${BO}#promotags=956%20%7C%7C%20%2410%20OFF%20%2499%0A959%20%7C%7C%20%2430%20OFF%20%24199`;
+    listeners['tabs.onCreated'].forEach((fn) => fn({ id: 7, pendingUrl: url }));
+    await waitFor(async () => (await chrome.storage.session.get('pendingImport')).pendingImport);
+    listeners['tabs.onUpdated'].forEach((fn) => fn(7, { url, status: 'loading' }, { id: 7, url }));
+    await pause(300);
+    const p = (await chrome.storage.session.get('pendingImport')).pendingImport;
+    assertEqual(p.items.map((i) => `${i.code}=${i.desc}`).join(';'), '956=$10 OFF $99;959=$30 OFF $199');
+    assertEqual(JSON.stringify(calls.tabsUpdate), JSON.stringify([[7, BO]]), 'tags removed from the address bar');
+    assertEqual(calls.openPopup, 1, 'one click, one popup');
+    assert(calls.badge.includes('NEW'), 'badge as fallback');
+
+    const state = await handleUi({ type: 'UI_STATE' }, SENDER);
+    assertEqual(state.pendingImport.items.length, 2, 'popup sees it');
+    const taken = await handleUi({ type: 'UI_IMPORT_TAKE' }, SENDER);
+    assertEqual(taken.import.items.length, 2);
+    assertEqual((await handleUi({ type: 'UI_IMPORT_TAKE' }, SENDER)).import, null, 'taken once');
+  });
+
+  test('alert link: other sites and plain Backoffice URLs are ignored', async () => {
+    await prepare({ outcomes: [['956', 'A']] });
+    store.session = {};
+    calls.openPopup = 0;
+    await checkImportLink(8, 'https://evil.example.com/backoffice/#promotags=956%20%7C%7C%20X');
+    await checkImportLink(9, `${BO}`);
+    await checkImportLink(10, `${BO}#other=1`);
+    assertEqual((await chrome.storage.session.get('pendingImport')).pendingImport, undefined);
+    assertEqual(calls.openPopup, 0);
+  });
+
+  runTests({ realTimeIO: true });
+</script>
+</body>
+</html>
