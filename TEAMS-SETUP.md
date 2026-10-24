@@ -62,15 +62,23 @@ as you. To stop the replies, clear the field and click **Save & Grant access**.
 
 ## 3. Add the button to the alert card (Jizong)
 
-Send Jizong the message below. Replace `<vm-ip>` with the VM's IP address (e.g. 10.101.32.163) or name. The links use the portal's
-address through IIS ([DEPLOY-VM.md](DEPLOY-VM.md), step 10); without IIS, use
-`http://<vm-ip>:8080/#promotags=` instead. With the extension instead of the VM, the link starts with
-your Backoffice URL, for example `https://<backoffice-host>/backoffice/#promotags=`.
+Send Jizong the message below. **Replace every `<vm-ip>` in it with the VM's address** (for example
+`10.101.32.163`). The links use the portal's address through IIS ([DEPLOY-VM.md](DEPLOY-VM.md), step 10);
+without IIS, use `http://<vm-ip>:8080/#promotags=` instead. With the extension instead of the VM, the
+link starts with your Backoffice URL, for example `https://<backoffice-host>/backoffice/#promotags=`.
 
-> Hi Jizong, could you add an "Open in Promo Tag Portal" button to the WTCSG Daily Alert card? It opens
-> our Promo Tag Portal with the alert's tags filled in.
+Before you send it:
+
+- The portal must be running when he tries the button.
+- Every button points at that address, so it must not change for this VM.
+- Anyone who clicks the button without a portal login sees the login page. That's expected.
+- A run takes up to 25 tags. If an alert has more, remove the extra rows before **Execute**.
+
+> Hi Jizong, could you add an **"Open in Promo Tag Portal"** button to the WTCSG Daily Alert card? It
+> opens our Promo Tag Portal with the alert's tags already filled in. Nothing else on the card changes.
 >
-> In the card JSON, next to `"body"`, add:
+> **1. The button.** In the card JSON (the object with `"type": "AdaptiveCard"`), add this next to
+> `"body"`. If the card already has an `"actions"` list, just add the `{ … }` entry to it.
 >
 > ```json
 > "actions": [
@@ -78,8 +86,19 @@ your Backoffice URL, for example `https://<backoffice-host>/backoffice/#promotag
 > ]
 > ```
 >
-> `<LINK>` is `http://<vm-ip>/promotag/#promotags=` followed by the Alert_Message values, one per line,
-> URL-encoded as a whole. For example:
+> **2. The link.** `<LINK>` is `http://<vm-ip>/promotag/#promotags=` followed by the card's
+> Alert_Message values, one per line, URL-encoded as a whole.
+>
+> *If the card is built in Power Automate:*
+>
+> - Before the card step, add a **Select** action and rename it `Alert messages`. **From:** the alert
+>   rows the card is built from. **Map:** switch to text mode and enter this as an expression (**fx**):
+>   `item()?['Alert_Message']`
+> - In the card JSON, set `"url"` to this expression (**fx**):
+>   `concat('http://<vm-ip>/promotag/#promotags=', encodeUriComponent(join(body('Alert_messages'), decodeUriComponent('%0A'))))`
+> - If you already collect the messages in a variable, you can join that instead of adding the Select.
+>
+> *If a script builds the card:*
 >
 > ```python
 > link = "http://<vm-ip>/promotag/#promotags=" + urllib.parse.quote("\n".join(messages), safe="")
@@ -89,8 +108,14 @@ your Backoffice URL, for example `https://<backoffice-host>/backoffice/#promotag
 > $link = 'http://<vm-ip>/promotag/#promotags=' + [uri]::EscapeDataString($messages -join "`n")
 > ```
 >
-> For today's alert (956 and 959) the link is:
-> `http://<vm-ip>/promotag/#promotags=956%20%7C%7C%20%2410%20OFF%20%2499%0A959%20%7C%7C%20%2430%20OFF%20%24199`
+> If the alert is a plain message rather than a card, a link works the same way:
+> `<a href="<LINK>">Open in Promo Tag Portal</a>`.
+>
+> **3. To check it.** For the messages `956 || $10 OFF $99` and `959 || $30 OFF $199`, the link is
+> `http://<vm-ip>/promotag/#promotags=956%20%7C%7C%20%2410%20OFF%20%2499%0A959%20%7C%7C%20%2430%20OFF%20%24199`.
+> Clicking the button should open the **Promo Tag Portal login page**, which means it works (only
+> portal users can log in). If you get a 502 error instead, the portal is down on our side, so just
+> let me know.
 
 Once the button is there, clicking it opens the portal with the tags filled in (log in first if
 asked). Check the tags, then click **Execute** as usual. Until the button exists, pasting the card
@@ -106,4 +131,6 @@ still works.
 | The test was sent, but nothing appears in Teams | Open the flow's **Run history**. The failed step shows the error. Check the link in `Channel link`. |
 | The reply appears as a new message, not in the alert's thread | No recent post in the channel contains the run's first tag code. |
 | The button opens the portal but no tags appear | The link must contain `#promotags=` followed by the encoded lines. If you weren't logged in, log in: the tags load right after. |
+| Only the first tag appears, with the next code stuck to its description | The Alert_Message values were joined without line breaks. Join them with a line break before encoding (in Power Automate: `decodeUriComponent('%0A')`). |
 | The button doesn't open the portal | Your PC must reach the VM: open `http://<vm-ip>/promotag/` by hand, and see [DEPLOY-VM.md](DEPLOY-VM.md), step 10. |
+| The button shows **HTTP Error 502.3 - Bad Gateway** | IIS works, but the portal on the VM isn't running. On the VM, check the **Promo Tag Portal** window, or double-click `update-portal.cmd` ([DEPLOY-VM.md](DEPLOY-VM.md)). |
