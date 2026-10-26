@@ -2,8 +2,9 @@
 
 Version 1.2 adds two Teams features:
 
-- **Auto-reply.** When a run finishes, the portal replies under that day's Daily Alert with one line per
-  tag, for example `959  2 FOR $82.00 → $30 OFF $199 ✅`. Screenshots stay in the portal's History.
+- **Auto-reply.** When a run finishes, the portal replies under each tag's own Daily Alert with one
+  line, for example `959  2 FOR $82.00 → $30 OFF $199 ✅` (since version 1.4; before, one reply under
+  the first tag's alert listed them all). Screenshots stay in the portal's History.
 - **"Open in Promo Tag Portal" button** on the alert card. One click opens the portal with the tags
   already filled in.
 
@@ -46,8 +47,10 @@ concat(outputs('Messages_URL'), if(empty(body('Find_alert')), '', concat('/', co
    panel, copy **HTTP URL** with the copy button at the end of the field. If you are on the flow's
    details page, click **Edit** first. The browser's address bar is not this URL.
 
-The flow finds the newest post in the channel that contains the run's first tag code (for example
-`956 ||`) and replies under it. If no post matches, it posts a new message instead. Replies show your name.
+The portal calls the flow once for each tag that reached Hybris. Each time, the flow finds the newest
+post among the channel's latest 50 that contains that tag's code (for example `956 ||`) and replies
+under it, so every tag's result lands in its own alert's thread. If no post matches, it posts a new
+message instead. Replies show your name. Tags that were skipped or did not run get no reply.
 
 ## 2. Connect the portal (2 minutes)
 
@@ -129,7 +132,8 @@ still works.
 | **Get alerts** fails with "URI path is not a valid Graph endpoint" | An expression was pasted as plain text. In the failed run, click **Messages URL**: its output must start with `https://graph.microsoft.com/v1.0/teams/`. Re-enter expression **A** and the **Get alerts** URI with **fx**. |
 | **Send test** says the workflow refused the request | Set the trigger's **Who can trigger the flow?** to **Anyone**. |
 | The test was sent, but nothing appears in Teams | Open the flow's **Run history**. The failed step shows the error. Check the link in `Channel link`. |
-| The reply appears as a new message, not in the alert's thread | No recent post in the channel contains the run's first tag code. |
+| A reply appears as a new message, not in the alert's thread | None of the channel's latest 50 posts contains that tag's code followed by `\|\|` (for example `956 \|\|`). |
+| Some replies arrived, then **Teams reply not sent for …** | The portal stops at the first reply that fails. Click **Retry Teams reply**: it sends only the tags listed. |
 | The button opens the portal but no tags appear | The link must contain `#promotags=` followed by the encoded lines. If you weren't logged in, log in: the tags load right after. |
 | Only the first tag appears, with the next code stuck to its description | The Alert_Message values were joined without line breaks. Join them with a line break before encoding (in Power Automate: `decodeUriComponent('%0A')`). |
 | The button doesn't open the portal | Your PC must reach the VM: open `http://<vm-ip>/promotag/` by hand, and see [DEPLOY-VM.md](DEPLOY-VM.md), step 10. |

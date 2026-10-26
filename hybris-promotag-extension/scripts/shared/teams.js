@@ -2,8 +2,8 @@
  * Teams integration. Pure functions (needs shared/batch.js), shared by the service worker and the tests.
  *  - "Open in Promo Tag Portal" links on the Daily Alert card:
  *      <Backoffice URL>#promotags=<URL-encoded "code || description" lines>
- *  - the reply posted under the day's Daily Alert when a run finishes: one line per tag, as a
- *    Microsoft Graph chatMessage handed to the user's Power Automate workflow. Screenshots stay in History.
+ *  - the replies posted when a run finishes: one per tag, under that tag's Daily Alert, as a Microsoft
+ *    Graph chatMessage handed to the user's Power Automate workflow. Screenshots stay in History.
  */
 (function (root) {
   'use strict';
@@ -42,16 +42,13 @@
     return { url, permission: `https://${u.hostname}/*` };
   }
 
-  /** The flow replies under the newest channel post containing this text. */
-  function matchText(batch) {
-    const first = batch && batch.items[0];
-    return first ? `${first.code} ||` : 'Daily Alert';
+  /** A tag gets a reply when it reached Hybris; environment failures (VPN, session) are not news. */
+  function isReported(it) {
+    return REPORTED.has(it.status) && !(it.status === 'failed' && PTAE.batch.STOP_CODES.has(it.errorCode));
   }
 
-  /** Worth a reply when at least one tag reached Hybris; environment failures (VPN, session) are not news. */
   function shouldPost(batch) {
-    const env = PTAE.batch.STOP_CODES;
-    return !!batch && batch.items.some((it) => REPORTED.has(it.status) && !(it.status === 'failed' && env.has(it.errorCode)));
+    return !!batch && batch.items.some(isReported);
   }
 
   const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -63,15 +60,20 @@
     return `${change} ${MARKS[it.status] || '⏭ not run'}`;
   }
 
-  /** Graph chatMessage, one line per tag: "959  2 FOR $82.00 → $30 OFF $199 ✅". */
-  function buildReply({ batch }) {
-    const lines = batch.items.map((it) => `<b>${esc(it.code)}</b>&emsp;${esc(replyText(it))}`);
-    return { body: { contentType: 'html', content: `<p>${lines.join('<br>')}</p>` } };
+  /** Graph chatMessage with the tag's line: "959  2 FOR $82.00 → $30 OFF $199 ✅". */
+  function buildReply(it) {
+    return { body: { contentType: 'html', content: `<p><b>${esc(it.code)}</b>&emsp;${esc(replyText(it))}</p>` } };
   }
 
-  /** Request body for the workflow: where to reply (match) and what to post (message). */
-  function buildPayload({ batch }) {
-    return { source: 'promo-tag-portal', version: 1, match: matchText(batch), message: buildReply({ batch }) };
+  /**
+   * Requests for the workflow, one per tag that reached Hybris, in run order: the flow replies under
+   * the newest channel post containing "<code> ||" (that tag's Daily Alert), or posts a new message.
+   */
+  function buildPayloads({ batch }) {
+    return batch.items.filter(isReported).map((it) => ({
+      code: it.code,
+      payload: { source: 'promo-tag-portal', version: 1, match: `${it.code} ||`, message: buildReply(it) },
+    }));
   }
 
   function buildTestPayload({ operator }) {
@@ -84,11 +86,11 @@
     importLink,
     parseImportLink,
     parseWebhookUrl,
-    matchText,
+    isReported,
     shouldPost,
     replyText,
     buildReply,
-    buildPayload,
+    buildPayloads,
     buildTestPayload,
   };
 })(globalThis);

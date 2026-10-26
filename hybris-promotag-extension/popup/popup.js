@@ -765,14 +765,16 @@
     renderTeams(active ? null : b.teams);
   }
 
-  /** Teams reply status under a finished run; a send that never finished counts as failed. */
+  /** Teams replies under a finished run (one per tag); a send that never finished counts as failed. */
   function renderTeams(t) {
     const stuck = !!t && t.status === 'sending' && Date.now() - (t.at || 0) > 120000;
     const failed = !!t && (t.status === 'failed' || stuck);
+    const sent = (t && t.sent) || [];
+    const pending = t && t.pending && t.pending.length ? ` for ${t.pending.join(', ')}` : '';
     let text = '';
-    if (failed) text = `Teams reply not sent: ${t.error || 'interrupted.'}`;
-    else if (t && t.status === 'sending') text = 'Sending the Teams reply…';
-    else if (t && t.status === 'sent') text = 'Teams reply sent ✓';
+    if (failed) text = `Teams reply not sent${pending}: ${t.error || 'interrupted.'}`;
+    else if (t && t.status === 'sending') text = 'Sending the Teams replies…';
+    else if (t && t.status === 'sent') text = sent.length > 1 ? `${sent.length} Teams replies sent, each under its tag's alert ✓` : 'Teams reply sent ✓';
     const n = $('teams-note');
     n.className = failed ? 'note warn' : 'note';
     n.textContent = text;

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Hybris Promo Tag Amendment Portal",
   "short_name": "Promo Tag Portal",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "Amends SAP Hybris Backoffice Promotion Tag descriptions from DAILY_ALERT payloads, verifies the change, keeps a local history with screenshots, and replies under the Teams Daily Alert.",
   "minimum_chrome_version": "116",
   "icons": {

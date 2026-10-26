@@ -41,7 +41,7 @@
         item(1, '889', '3 FOR $23', 'succeeded', verified('889', '3 FOR $20', '3 FOR $23', 2)),
         item(2, '892', '6 FOR $29.50', 'unchanged', { outcome: 'already-up-to-date', oldDesc: '6 FOR $29.50', runId: 'run-892', message: 'Tag 892 already shows "6 FOR $29.50" — nothing changed.' }),
       ],
-      teams: { status: 'sent', at: now },
+      teams: { status: 'sent', at: now, sent: ['888', '889', '892'], pending: [] },
     },
     failure: {
       id: 'batch-demo', status: 'done', current: 1, confirmAll: false, confirmBeforeSave: true, updatedAt: now,
@@ -49,7 +49,7 @@
         item(0, '999', '2 FOR $82.00', 'failed', notFound('999')),
         item(1, '959', '$30 OFF $199', 'succeeded', verified('959', '2 FOR $82.00', '$30 OFF $199', 1)),
       ],
-      teams: { status: 'failed', at: now, error: 'Could not reach the Teams workflow (connect ETIMEDOUT).' },
+      teams: { status: 'failed', at: now, error: 'Could not reach the Teams workflow (connect ETIMEDOUT).', sent: [], pending: ['999', '959'] },
     },
     result: {
       id: 'batch-demo', status: 'done', current: 2, confirmAll: true, confirmBeforeSave: true, updatedAt: now,
@@ -58,7 +58,7 @@
         item(1, '889', '3 FOR $23', 'succeeded', verified('889', '3 FOR $20', '3 FOR $23', 2)),
         item(2, '892', '6 FOR $29.50', 'failed', notFound('892')),
       ],
-      teams: { status: 'sent', at: now },
+      teams: { status: 'sent', at: now, sent: ['888', '889', '892'], pending: [] },
     },
   };
 
@@ -90,7 +90,7 @@
     { t: t(35), level: 'error', msg: 'Tag Code 999 not found in Hybris.' },
     { t: t(34), level: 'info', msg: '— Tag 2 of 2: 959 → "$30 OFF $199"' },
     { t: t(20), level: 'ok', msg: 'Tag 959: "2 FOR $82.00" → "$30 OFF $199" — verified (attempt 1).' },
-    { t: t(18), level: 'error', msg: 'Teams reply not sent: Could not reach the Teams workflow (connect ETIMEDOUT).' },
+    { t: t(18), level: 'error', msg: 'Teams reply not sent for 999, 959: Could not reach the Teams workflow (connect ETIMEDOUT).' },
   ];
 
   // [runId, kind, tag code, text in the grid, highlight colour]
@@ -140,7 +140,7 @@
       id: 'preview',
       lastError: undefined,
       getURL: (p) => p,
-      getManifest: () => ({ version: '1.3.1' }),
+      getManifest: () => ({ version: '1.4.0' }),
       reload() {},
       sendMessage(msg, cb) {
         setTimeout(() => cb && cb(msg.type === 'UI_STATE' ? state : { ok: true }), 0);

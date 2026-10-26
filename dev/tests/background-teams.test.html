@@ -50,8 +50,9 @@
   const realFetch = window.fetch.bind(window);
   window.fetch = async (url, opts) => {
     if (String(url).startsWith('https://hook.example.com/')) {
-      calls.hooks.push({ url, body: JSON.parse(opts.body) });
-      return new Response(null, { status: hookStatus });
+      const body = JSON.parse(opts.body);
+      calls.hooks.push({ url, body });
+      return new Response(null, { status: typeof hookStatus === 'function' ? hookStatus(body) : hookStatus });
     }
     if (String(url).startsWith('chrome-extension://')) throw new TypeError('no extension files in this page');
     return realFetch(url, opts);
@@ -101,36 +102,72 @@
 
   const teamsState = async () => ((await chrome.storage.session.get('batch')).batch || {}).teams;
 
-  test('run finishes → one short reply, one line per tag', async () => {
+  const settled = () => waitFor(async () => { const s = await teamsState(); return s && s.status !== 'sending' && s; });
+
+  test('run finishes → one short reply per tag, each under its own Daily Alert', async () => {
     hookStatus = 202;
-    await prepare({ outcomes: [['956', '$10 OFF $99', 'success', { oldDesc: '$10 OFF $80', verify: { attempts: 1 } }], ['959', '$30 OFF $199', 'already-up-to-date', { oldDesc: '$30 OFF $199' }]] });
+    await prepare({ outcomes: [
+      ['964', '6 FOR $16.90', 'success', { oldDesc: '2 FOR $83.50', verify: { attempts: 1 } }],
+      ['958', 'BUY 10 GET 10', 'already-up-to-date', { oldDesc: 'BUY 10 GET 10' }],
+      ['960', 'MEMBER $89.90', 'cancelled', { oldDesc: '2 FOR $82.40' }],
+    ] });
     await completeBatch();
-    const t = await waitFor(async () => { const s = await teamsState(); return s && s.status !== 'sending' && s; });
+    const t = await settled();
     assertEqual(t.status, 'sent', JSON.stringify(t));
-    assertEqual(calls.hooks.length, 1, 'posted once');
-    const { url, body } = calls.hooks[0];
-    assertEqual(url, HOOK, 'signed URL used verbatim');
-    assertEqual(body.match, '956 ||');
-    assertEqual(body.message.body.content, '<p><b>956</b>&emsp;$10 OFF $80 → $10 OFF $99 ✅<br><b>959</b>&emsp;$30 OFF $199 ✅ already set</p>');
-    assertEqual(body.message.hostedContents, undefined, 'no screenshots');
-    assert((await chrome.storage.session.get('logs')).logs.some((l) => /Results sent to Teams/.test(l.msg)), 'logged');
+    assertEqual(JSON.stringify(t.sent), '["964","958"]');
+    assertEqual(calls.hooks.length, 2, 'one call per tag that reached Hybris; skipped 960 gets none');
+    assert(calls.hooks.every((h) => h.url === HOOK), 'signed URL used verbatim');
+    assertEqual(calls.hooks.map((h) => h.body.match).join(' | '), '964 || | 958 ||');
+    assertEqual(calls.hooks.map((h) => h.body.message.body.content).join('\n'),
+      '<p><b>964</b>&emsp;2 FOR $83.50 → 6 FOR $16.90 ✅</p>\n<p><b>958</b>&emsp;BUY 10 GET 10 ✅ already set</p>');
+    assert(calls.hooks.every((h) => h.body.message.hostedContents === undefined), 'no screenshots');
+    assert((await chrome.storage.session.get('logs')).logs.some((l) => /Results sent to Teams: a reply under the Daily Alert of 964, 958/.test(l.msg)), 'logged');
     await completeBatch();
     await pause(200);
-    assertEqual(calls.hooks.length, 1, 'never posted twice for one run');
+    assertEqual(calls.hooks.length, 2, 'never posted twice for one run');
   });
 
-  test('workflow refuses → failed with a fix-it message; Retry then sends', async () => {
+  test('workflow refuses → failed with a fix-it message, nothing else tried; Retry then sends', async () => {
     hookStatus = 403;
-    await prepare({ outcomes: [['956', '$10 OFF $99', 'success', { oldDesc: '$10 OFF $80' }]] });
+    await prepare({ outcomes: [['956', '$10 OFF $99', 'success', { oldDesc: '$10 OFF $80' }], ['959', '$30 OFF $199', 'success', { oldDesc: 'X' }]] });
     await completeBatch();
-    const t = await waitFor(async () => { const s = await teamsState(); return s && s.status !== 'sending' && s; });
+    const t = await settled();
     assertEqual(t.status, 'failed');
     assertMatch(t.error, /Anyone/);
+    assertEqual(JSON.stringify(t.pending), '["956","959"]');
+    assertEqual(calls.hooks.length, 1, 'stopped at the first failure');
     hookStatus = 202;
     const resp = await handleUi({ type: 'UI_TEAMS_RETRY' }, SENDER);
     assertEqual(resp.ok, true, JSON.stringify(resp));
-    assertEqual((await teamsState()).status, 'sent');
-    assertEqual(calls.hooks.length, 2);
+    const after = await teamsState();
+    assertEqual(after.status, 'sent');
+    assertEqual(JSON.stringify(after.pending), '[]');
+    assertEqual(calls.hooks.length, 3);
+  });
+
+  test('a reply fails partway → Retry sends only the tags not sent yet', async () => {
+    let failOnce = true;
+    hookStatus = (body) => {
+      if (body.match === '958 ||' && failOnce) {
+        failOnce = false;
+        return 500;
+      }
+      return 202;
+    };
+    await prepare({ outcomes: [['964', 'A', 'success', { oldDesc: 'a' }], ['958', 'B', 'success', { oldDesc: 'b' }], ['960', 'C', 'success', { oldDesc: 'c' }]] });
+    await completeBatch();
+    const t = await settled();
+    assertEqual(t.status, 'failed');
+    assertEqual(JSON.stringify(t.sent), '["964"]');
+    assertEqual(JSON.stringify(t.pending), '["958","960"]');
+    assert((await chrome.storage.session.get('logs')).logs.some((l) => /Teams reply not sent for 958, 960: The Teams workflow answered HTTP 500/.test(l.msg)), 'logged');
+    const resp = await handleUi({ type: 'UI_TEAMS_RETRY' }, SENDER);
+    assertEqual(resp.ok, true, JSON.stringify(resp));
+    const after = await teamsState();
+    assertEqual(after.status, 'sent');
+    assertEqual(JSON.stringify(after.sent), '["964","958","960"]');
+    assertEqual(calls.hooks.map((h) => h.body.match.split(' ')[0]).join(','), '964,958,958,960', '964 is never sent twice');
+    hookStatus = 202;
   });
 
   test('nothing posted for VPN failures, or when Teams is not set up, or without access', async () => {
@@ -148,7 +185,7 @@
     permitted = false;
     await prepare({ outcomes: [['956', 'A', 'success', { oldDesc: 'B' }]] });
     await completeBatch();
-    const t = await waitFor(async () => { const s = await teamsState(); return s && s.status !== 'sending' && s; });
+    const t = await settled();
     permitted = true;
     assertEqual(t.status, 'failed');
     assertMatch(t.error, /Grant access/);

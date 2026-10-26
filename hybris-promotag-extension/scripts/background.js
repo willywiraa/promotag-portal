@@ -599,9 +599,11 @@ async function captureNow(runId) {
 }
 
 // --- Teams reply ------------------------------------------------------------------------------------
-// When a run finishes, one line per tag goes to the user's Power Automate flow, which replies under
-// the Daily Alert post (see TEAMS-SETUP.md). The flow's URL is in Settings; screenshots stay in History.
+// When a run finishes, the user's Power Automate flow is called once per tag that reached Hybris and
+// replies with that tag's line under its own Daily Alert post (see TEAMS-SETUP.md). The flow's URL is
+// in Settings; screenshots stay in History.
 const teamsPosting = new Set(); // batch ids being posted (completion and retry can race)
+const TEAMS_GAP_MS = 400; // between two calls, so a long run doesn't arrive as one burst
 
 /** The flow's URL, once access to it is granted. */
 async function teamsWebhook() {
@@ -633,23 +635,36 @@ async function postToWebhook(url, payload) {
   throw new UserError(`The Teams workflow answered HTTP ${res.status}.`);
 }
 
-/** Replies under the day's Daily Alert with the run's results. retry: post again after a failure. */
+/**
+ * Replies under each tag's Daily Alert, one call per tag, and records which tags are done. The first
+ * failure stops the rest (a wrong URL or no internet fails them all); retry sends the ones not sent.
+ */
 async function postToTeams(batchId, retry) {
   const [settings, batch] = await Promise.all([getSettings(), getBatch()]);
   if (!settings.teamsWebhookUrl || !batch || batch.id !== batchId || Batch.isActive(batch)) return;
   if (!Teams.shouldPost(batch) || (batch.teams && !retry) || teamsPosting.has(batchId)) return;
   teamsPosting.add(batchId);
-  const setTeams = (teams) => updateBatch((b) => (b.id === batchId ? Object.assign(b, { teams }) : b));
+  const sent = (batch.teams && batch.teams.sent) || [];
+  const todo = Teams.buildPayloads({ batch }).filter((p) => !sent.includes(p.code));
+  const pending = () => todo.map((p) => p.code).filter((code) => !sent.includes(code));
+  const setTeams = (status, error) => updateBatch((b) => (b.id === batchId
+    ? Object.assign(b, { teams: { status, at: Date.now(), error: error || null, sent: sent.slice(), pending: pending() } })
+    : b));
   try {
-    await setTeams({ status: 'sending', at: Date.now() });
+    await setTeams('sending');
     const hook = await teamsWebhook();
-    await postToWebhook(hook.url, Teams.buildPayload({ batch }));
-    await setTeams({ status: 'sent', at: Date.now() });
-    await appendLog('ok', 'Results sent to Teams — they appear as a reply under the Daily Alert.');
+    for (const [i, p] of todo.entries()) {
+      if (i) await sleep(TEAMS_GAP_MS);
+      await postToWebhook(hook.url, p.payload);
+      sent.push(p.code);
+      await setTeams('sending');
+    }
+    await setTeams('sent');
+    await appendLog('ok', `Results sent to Teams: a reply under the Daily Alert of ${sent.join(', ')}.`);
   } catch (err) {
     const error = (err && err.message) || String(err);
-    await setTeams({ status: 'failed', at: Date.now(), error });
-    await appendLog('warn', `Teams reply not sent: ${error}`);
+    await setTeams('failed', error);
+    await appendLog('warn', `Teams reply not sent for ${pending().join(', ')}: ${error}`);
   } finally {
     teamsPosting.delete(batchId);
   }

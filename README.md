@@ -13,7 +13,7 @@ Microsoft Edge extension (Manifest V3; also runs in Chrome) that applies DAILY_A
    **local history database** that you can browse, filter and export.
 
 It can also work with the Daily Alert in Teams: an **Open in Promo Tag Portal** button on the alert card
-loads the tags for you, and each finished run is posted as a reply under the alert. See
+loads the tags for you, and each tag's result is posted as a reply under its alert. See
 [TEAMS-SETUP.md](TEAMS-SETUP.md).
 
 Instead of the extension, the same portal can run on a Windows VM and be opened from any PC on the
@@ -96,11 +96,12 @@ Data lives in this browser profile (IndexedDB). It stays until you delete it or 
 
 ## Teams reply
 
-When a run finishes, the portal sends the results to your Power Automate flow, which replies under that
-day's Daily Alert with one line per tag, for example `959  2 FOR $82.00 → $30 OFF $199 ✅` (also
-`✅ already set`, `❌ failed`, `⏭ skipped`). Screenshots and full details stay in History. Runs where
-nothing reached Hybris (for example the VPN was down) are not posted. The run view shows
-**Teams reply sent ✓**, or the reason it failed and **Retry Teams reply**.
+When a run finishes, the portal sends each tag's result to your Power Automate flow, which replies
+under that tag's own Daily Alert with one line, for example `959  2 FOR $82.00 → $30 OFF $199 ✅`
+(also `✅ already set` or `❌ failed`). Tags that were skipped or did not run, and failures of the
+environment (for example the VPN was down), get no reply. Screenshots and full details stay in History.
+The run view shows **Teams replies sent ✓**, or which tags weren't sent and why, with
+**Retry Teams reply** (it sends only those).
 
 Setup (flow, workflow URL in Settings, **Send test**) and the button on the alert card are described in
 [TEAMS-SETUP.md](TEAMS-SETUP.md).
