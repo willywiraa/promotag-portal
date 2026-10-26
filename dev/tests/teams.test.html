@@ -167,6 +167,48 @@
     ].join('\n'));
   });
 
+  // Guard: only a save that was read back from Hybris (outcome "success") or a value that was already
+  // set may show ✅. Every other outcome replies "❌ failed" or not at all, with or without a screenshot.
+  test('a failed or unverified save never produces a ✅ reply', () => {
+    const shot = { bytes: fakeJpeg(1600, 900), contentType: 'image/jpeg' };
+    const cases = [
+      ['failed', { code: 'VERIFY', oldDesc: '10% OFF $80', message: 'Change not reflected after 3 retries — grid shows "10% OFF $80" (expected "10% OFF $70").', verify: { attempts: 4, observed: '10% OFF $80', matched: false } }, '❌'],
+      ['failed', { code: 'SAVE', oldDesc: '10% OFF $80', message: 'Backoffice rejected the save: Tag exceeds 40 characters' }, '❌'],
+      ['failed', { code: 'IDENTITY', message: 'Editor shows Tag Code "9560", expected "956" — aborting without changes.' }, '❌'],
+      ['failed', { code: 'NOT_FOUND', message: 'Tag Code 956 not found in Hybris.' }, '❌'],
+      ['failed', { code: 'AMBIGUOUS', message: 'Tag Code 956: 2 result rows show this code.' }, '❌'],
+      ['failed', { code: 'TIMEOUT', message: 'Timed out after 30000 ms waiting for Promotion Tag tree node.' }, '❌'],
+      ['failed', { message: 'No result.' }, '❌'],
+      ['cancelled', { oldDesc: '10% OFF $80', message: 'Cancelled by operator — no changes made.' }, null],
+      ['aborted', { code: 'ABORTED', oldDesc: '10% OFF $80', message: 'Stopped by operator.' }, null],
+      ...['TAB', 'STALLED', 'SESSION', 'NETWORK'].map((code) => ['failed', { code, oldDesc: '10% OFF $80', message: `${code} after Save was clicked` }, null]),
+    ];
+    for (const [outcome, extra, expected] of cases) {
+      const b = finished(['956', '10% OFF $70', outcome, extra]);
+      const label = `${outcome}/${extra.code || '-'}`;
+      assert(!/✅/.test(T.replyText(b.items[0])), `${label}: reply line`);
+      for (const images of [undefined, { 956: shot }]) {
+        const replies = T.buildPayloads({ batch: b, images });
+        if (expected === null) {
+          assertEqual(replies.length, 0, `${label}: no reply at all`);
+          continue;
+        }
+        assertEqual(replies.length, 1, label);
+        const content = replies[0].payload.message.body.content;
+        assert(!/✅/.test(content), `${label}: no ✅ in ${content}`);
+        assertMatch(content, /❌ failed/, label);
+      }
+    }
+    // ✅ only where Hybris shows the new value: read back after saving, or already set before.
+    const ok = finished(['956', '10% OFF $70', 'success', { oldDesc: '10% OFF $80', verify: { attempts: 1, observed: '10% OFF $70', matched: true } }]);
+    assertMatch(T.buildPayloads({ batch: ok })[0].payload.message.body.content, /10% OFF \$80 → 10% OFF \$70 ✅<\/p>$/);
+    const same = finished(['956', '10% OFF $70', 'already-up-to-date', { oldDesc: '10% OFF $70' }]);
+    assertMatch(T.buildPayloads({ batch: same })[0].payload.message.body.content, /✅ already set<\/p>$/);
+    ['pending', 'running', 'awaiting_confirm', 'failed', 'skipped', 'stopped'].forEach((status) => {
+      assert(!/✅/.test(T.replyText({ code: '956', newDesc: 'A', oldDesc: 'B', status })), `status ${status}`);
+    });
+  });
+
   test('replies: none for environment failures (VPN, session) or tags that did not run', () => {
     const b = finished(['956', 'A', 'success', { oldDesc: 'B' }], ['959', 'C', 'failed', { code: 'NETWORK', message: 'VPN' }], ['960', 'D']);
     assertEqual(T.buildPayloads({ batch: b }).map((r) => r.code).join(','), '956');

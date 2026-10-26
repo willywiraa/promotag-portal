@@ -181,6 +181,8 @@
     assertEqual(t.result.code, 'VERIFY');
     assertEqual(t.result.verify.attempts, 4);
     assertMatch(t.result.message, /not reflected after 3 retries — grid shows "10% OFF \$80"/);
+    assert(!/verified/i.test(t.result.message) && t.result.verify.matched === false, 'the result never claims a verified save');
+    assert(!has(t, /Verified in the result grid/), 'no log line claims verification');
     assertEqual(t.captures[t.captures.length - 1].kind, 'after');
     assertEqual(M.log.filter((x) => x === 'save').length, 1, 'never saves twice');
   });

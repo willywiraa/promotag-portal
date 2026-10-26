@@ -171,6 +171,26 @@
     assertMatch(byCode['961'].body.content, /\(screenshot in the portal's History\)/);
   });
 
+  test('guard: an unverified save is reported ❌ failed (screenshot is not proof); a lost tab after Save gets no reply', async () => {
+    hookStatus = 202;
+    const b = await prepare({ outcomes: [
+      ['971', 'NEW A', 'success', { oldDesc: 'OLD A', verify: { attempts: 1, observed: 'NEW A', matched: true } }],
+      ['972', 'NEW B', 'failed', { code: 'VERIFY', oldDesc: 'OLD B', message: 'Change not reflected after 3 retries — grid shows "OLD B" (expected "NEW B").', verify: { attempts: 4, observed: 'OLD B', matched: false } }],
+      ['973', 'NEW C', 'failed', { code: 'TAB', oldDesc: 'OLD C', message: 'Lost contact with the Backoffice tab after Save.' }],
+    ] });
+    await seedShots(b.items[0], [['after', fakeJpeg(1600, 900)]]);
+    await seedShots(b.items[1], [['before', fakeJpeg(1601, 901)], ['after', fakeJpeg(1602, 902)]]); // red: not reflected
+    await completeBatch();
+    const t = await settled();
+    assertEqual(t.status, 'sent', JSON.stringify(t));
+    assertEqual(calls.hooks.map((h) => h.body.match).join(' | '), '971 || | 972 ||', '973 (environment failure) gets no reply');
+    const [verified, unverified] = calls.hooks.map((h) => h.body.message);
+    assertMatch(verified.body.content, /OLD A → NEW A ✅/);
+    assert(!/✅/.test(JSON.stringify(unverified)), `no ✅ anywhere in the unverified reply: ${unverified.body.content}`);
+    assertMatch(unverified.body.content, /<b>972<\/b>&emsp;OLD B → NEW B ❌ failed<\/p>/);
+    assertEqual(unverified.hostedContents.length, 1, 'its screenshot is attached as evidence, not as proof of success');
+  });
+
   test('screenshots switched off → the replies carry only their line', async () => {
     hookStatus = 202;
     const b = await prepare({ screenshots: false, outcomes: [['963', 'A', 'success', { oldDesc: 'B' }]] });

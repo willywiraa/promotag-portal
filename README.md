@@ -202,7 +202,8 @@ The suites cover:
 - ZK input sync
 - the history database
 - the Teams reply and alert links: message building and link parsing, plus the real service worker run
-  against a stubbed browser (reply, retry, nothing posted on VPN failures, link import)
+  against a stubbed browser (reply, retry, nothing posted on VPN failures, link import), and a guard that a
+  failed or unverified save never gets a ✅ reply
 - a syntax check
 - an end-to-end simulation against a scripted mock Backoffice whose explorer tree filters like the real
   one: the first tag of a fresh session (also when Backoffice filters again, the dashboard refreshes in
