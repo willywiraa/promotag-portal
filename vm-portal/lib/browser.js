@@ -179,10 +179,12 @@ class EdgeHost {
     return this.page(id).evaluate(() => !!(window.__ptaeVmInstall && window.__ptaeVmInstall()));
   }
 
-  async screenshotActive() {
+  /** Like chrome.tabs.captureVisibleTab: options.format 'jpeg' (with options.quality) or 'png'. */
+  async screenshotActive(options = {}) {
     if (this.activeId == null) throw new Error('No tab to capture.');
-    const png = await this.page(this.activeId).screenshot({ type: 'png' });
-    return `data:image/png;base64,${png.toString('base64')}`;
+    const jpeg = options.format === 'jpeg';
+    const shot = await this.page(this.activeId).screenshot(jpeg ? { type: 'jpeg', quality: options.quality || 90 } : { type: 'png' });
+    return `data:image/${jpeg ? 'jpeg' : 'png'};base64,${shot.toString('base64')}`;
   }
 
   /** Whether Edge can reach `url` (true/false), or null when there is no page to test from. */

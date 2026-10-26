@@ -117,7 +117,7 @@
         <section class="group" aria-labelledby="g-teams">
           <div class="group-head">
             <h3 id="g-teams">Teams reply</h3>
-            <p>When a run finishes, one line per tag (old → new ✅/❌) is posted under that day's Daily Alert. Screenshots stay in History.</p>
+            <p>When a run finishes, each tag's result (old → new ✅/❌) is posted under its own Daily Alert, with a screenshot of the updated tag.</p>
           </div>
           <div class="group-fields">
             <div class="field">
@@ -132,6 +132,10 @@
               </div>
               <p class="help">Keep this URL private: anyone who has it can post in the channel as you. Clear it and save to turn the reply off.</p>
             </div>
+            <label class="check">
+              <input id="set-teams-shots" type="checkbox">
+              <span>Include the updated tag's screenshot in each reply</span>
+            </label>
           </div>
         </section>
 

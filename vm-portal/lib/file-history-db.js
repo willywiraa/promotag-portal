@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 
 const SAFE_ID = /^[\w-]{1,80}$/;
+const FILE_TYPES = { 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/png': 'png' };
 
 function textMatch(run, q) {
   if (!q) return true;
@@ -116,7 +117,7 @@ function createFileHistoryDb(dir, helpers) {
     async addScreenshot(shot) {
       const { blob, ...meta } = shot;
       const id = helpers.newId('shot');
-      const file = `${id}.${/webp/.test(meta.mime || '') ? 'webp' : 'png'}`;
+      const file = `${id}.${FILE_TYPES[meta.mime] || 'png'}`;
       const bytes = Buffer.from(await blob.arrayBuffer());
       await fs.promises.writeFile(path.join(shotsDir, file), bytes);
       data.shots[id] = Object.assign({ id, takenAt: Date.now(), kind: 'manual' }, meta, { file, bytes: bytes.length });
@@ -126,8 +127,12 @@ function createFileHistoryDb(dir, helpers) {
       return id;
     },
 
+    /** The screenshot record with its image as a Blob, like the extension's database. */
     async getScreenshot(id) {
-      return clone(data.shots[id] || null);
+      const s = data.shots[id];
+      if (!s) return null;
+      const bytes = await fs.promises.readFile(path.join(shotsDir, s.file));
+      return Object.assign(clone(s), { blob: new Blob([bytes], { type: s.mime || 'image/png' }) });
     },
 
     async getScreenshotsForRun(runId) {

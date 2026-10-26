@@ -80,24 +80,40 @@
     throw new Error('timed out waiting');
   };
 
-  /** Session + settings + a finished batch. */
-  async function prepare({ outcomes, webhook = HOOK }) {
-    store.local = { settings: { baseUrl: BO, roleName: 'WTCSG Backoffice User Role', confirmBeforeSave: true, teamsWebhookUrl: webhook } };
+  /** Session + settings + a finished batch (each tag with a run id of its own). */
+  async function prepare({ outcomes, webhook = HOOK, screenshots = true }) {
+    store.local = { settings: { baseUrl: BO, roleName: 'WTCSG Backoffice User Role', confirmBeforeSave: true, teamsWebhookUrl: webhook, teamsScreenshots: screenshots } };
     store.local.portalSession = await PTAE.authCrypto.createSession('willy', 60);
     store.session = {};
     calls.hooks = [];
+    const id = `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     let b = PTAE.batch.createBatch({
-      id: `b-${Math.random()}`, operator: 'willy', confirmBeforeSave: true,
+      id, operator: 'willy', confirmBeforeSave: true,
       items: PTAE.batch.normalizeItems(outcomes.map(([code, newDesc]) => ({ code, newDesc })), PTAE.parser).items,
     });
     for (let i = 0; i < outcomes.length; i++) {
       const [, , outcome, extra] = outcomes[i];
       if (!outcome || b.items[i].status !== 'pending') continue;
-      b = PTAE.batch.startItem(b, i, { jobId: `j${i}`, runId: `run-${i}` });
+      b = PTAE.batch.startItem(b, i, { jobId: `j${i}`, runId: `run-${id}-${i}` });
       b = PTAE.batch.applyResult(b, i, Object.assign({ outcome }, extra)).batch;
     }
     store.session.batch = clone(b);
     return b;
+  }
+
+  /** A minimal JPEG of the given size: distinct sizes make distinct images. */
+  function fakeJpeg(width, height) {
+    return new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+      0xff, 0xc0, 0x00, 0x11, 0x08, height >> 8, height & 255, width >> 8, width & 255, 0x03, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, 0xff, 0xd9]);
+  }
+
+  /** Stores a run's screenshots in History, as the engine does during a run. */
+  async function seedShots(item, shots) {
+    await PTAE.historyDb.createRun({ id: item.runId, startedAt: Date.now(), tagCode: item.code, operator: 'willy' });
+    for (const [kind, bytes] of shots) {
+      await PTAE.historyDb.addScreenshot({ runId: item.runId, kind, blob: new Blob([bytes], { type: 'image/jpeg' }), mime: 'image/jpeg' });
+      await pause(5); // distinct times: the latest of a kind wins
+    }
   }
 
   const teamsState = async () => ((await chrome.storage.session.get('batch')).batch || {}).teams;
@@ -106,7 +122,7 @@
 
   test('run finishes → one short reply per tag, each under its own Daily Alert', async () => {
     hookStatus = 202;
-    await prepare({ outcomes: [
+    await prepare({ screenshots: false, outcomes: [
       ['964', '6 FOR $16.90', 'success', { oldDesc: '2 FOR $83.50', verify: { attempts: 1 } }],
       ['958', 'BUY 10 GET 10', 'already-up-to-date', { oldDesc: 'BUY 10 GET 10' }],
       ['960', 'MEMBER $89.90', 'cancelled', { oldDesc: '2 FOR $82.40' }],
@@ -125,6 +141,56 @@
     await completeBatch();
     await pause(200);
     assertEqual(calls.hooks.length, 2, 'never posted twice for one run');
+  });
+
+  test('each reply carries its own tag\'s updated screenshot from History', async () => {
+    hookStatus = 202;
+    const b = await prepare({ outcomes: [
+      ['963', '1 FOR 10% OFF, 2 FOR 25% OFF', 'success', { oldDesc: '2 FOR $83.40' }],
+      ['958', 'BUY 10 GET 10', 'already-up-to-date', { oldDesc: 'BUY 10 GET 10' }],
+      ['960', 'MEMBER $89.90', 'failed', { code: 'NOT_FOUND', message: 'Tag Code 960 not found in Hybris.' }],
+      ['961', 'X', 'success', { oldDesc: 'Y' }],
+    ] });
+    const shot = { before963: fakeJpeg(1601, 901), after963: fakeJpeg(1600, 900), after958: fakeJpeg(1280, 720), failure960: fakeJpeg(800, 600) };
+    await seedShots(b.items[0], [['before', shot.before963], ['after', fakeJpeg(1599, 899)], ['after', shot.after963]]);
+    await seedShots(b.items[1], [['after', shot.after958]]);
+    await seedShots(b.items[2], [['failure', shot.failure960]]);
+    // 961 has no screenshot (capture blocked)
+    await completeBatch();
+    const t = await settled();
+    assertEqual(t.status, 'sent', JSON.stringify(t));
+    assertEqual(calls.hooks.length, 4);
+    const byCode = Object.fromEntries(calls.hooks.map((h) => [h.body.match.split(' ')[0], h.body.message]));
+    const b64 = (bytes) => PTAE.teams.toBase64(bytes);
+    assertEqual(byCode['963'].hostedContents[0].contentBytes, b64(shot.after963), '963: its latest after shot, not the before shot');
+    assertMatch(byCode['963'].body.content, /^<p><b>963<\/b>&emsp;2 FOR \$83\.40 → 1 FOR 10% OFF, 2 FOR 25% OFF ✅<\/p><p><img src="\.\.\/hostedContents\/1\/\$value" alt="Tag 963 after the update" width="600" height="338"><\/p>$/);
+    assertEqual(byCode['958'].hostedContents[0].contentBytes, b64(shot.after958), '958: its own screenshot');
+    assertEqual(byCode['960'].hostedContents[0].contentBytes, b64(shot.failure960), '960: the failure screenshot');
+    assertMatch(byCode['960'].body.content, /❌ failed/);
+    assertEqual(byCode['961'].hostedContents, undefined, '961: no screenshot');
+    assertMatch(byCode['961'].body.content, /\(screenshot in the portal's History\)/);
+  });
+
+  test('screenshots switched off → the replies carry only their line', async () => {
+    hookStatus = 202;
+    const b = await prepare({ screenshots: false, outcomes: [['963', 'A', 'success', { oldDesc: 'B' }]] });
+    await seedShots(b.items[0], [['after', fakeJpeg(1600, 900)]]);
+    await completeBatch();
+    await settled();
+    assertEqual(calls.hooks.length, 1);
+    assertEqual(calls.hooks[0].body.message.body.content, '<p><b>963</b>&emsp;B → A ✅</p>');
+    assertEqual(calls.hooks[0].body.message.hostedContents, undefined);
+  });
+
+  test('test button: the test reply carries the newest screenshot, to show that images arrive', async () => {
+    hookStatus = 202;
+    const b = await prepare({ outcomes: [['963', 'A', 'success', { oldDesc: 'B' }]] });
+    const newest = fakeJpeg(1366, 768);
+    await seedShots(b.items[0], [['after', newest]]);
+    const resp = await handleUi({ type: 'UI_TEAMS_TEST' }, SENDER);
+    assertEqual(resp.withScreenshot, true, JSON.stringify(resp));
+    assertEqual(calls.hooks[0].body.match, 'Daily Alert');
+    assertEqual(calls.hooks[0].body.message.hostedContents[0].contentBytes, PTAE.teams.toBase64(newest));
   });
 
   test('workflow refuses → failed with a fix-it message, nothing else tried; Retry then sends', async () => {

@@ -35,7 +35,7 @@ const HEADLESS = process.env.PTAE_HEADLESS === '1';
 const VERSION = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8')).version;
 const UI_SENDER = { id: EXTENSION_ID, url: `chrome-extension://${EXTENSION_ID}/popup/popup.html` };
 const EXT_FOLDERS = ['popup/', 'history/', 'scripts/shared/', 'assets/'];
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.webp': 'image/webp', '.ico': 'image/png' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.ico': 'image/png' };
 const HISTORY_CALLS = new Set(['listRuns', 'getRun', 'getLogs', 'getScreenshotsForRun', 'deleteRun', 'deleteRunsBefore', 'counts']);
 const PAGE_CSP = "default-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
 const STATE_FILE = path.join(DATA, 'portal.json');

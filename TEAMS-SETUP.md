@@ -4,7 +4,8 @@ Version 1.2 adds two Teams features:
 
 - **Auto-reply.** When a run finishes, the portal replies under each tag's own Daily Alert with one
   line, for example `959  2 FOR $82.00 → $30 OFF $199 ✅` (since version 1.4; before, one reply under
-  the first tag's alert listed them all). Screenshots stay in the portal's History.
+  the first tag's alert listed them all), and below it a screenshot of the updated tag as proof (since
+  version 1.5). All screenshots also stay in the portal's History.
 - **"Open in Promo Tag Portal" button** on the alert card. One click opens the portal with the tags
   already filled in.
 
@@ -56,8 +57,9 @@ message instead. Replies show your name. Tags that were skipped or did not run g
 
 1. In the portal, open **Settings** (top right), paste the HTTP URL into **Teams reply → Workflow URL**
    and click **Save & Grant access**. (Extension only: click **Allow** when the browser asks.)
-2. Click **Send test**. Within about a minute, a test reply appears under the latest Daily Alert.
-   Delete it afterwards.
+2. Click **Send test**. Within about a minute, a test reply appears under the latest Daily Alert, with
+   the newest screenshot from History below it (once there is one). If the text arrives but not the
+   image, see the table below. Delete the test reply afterwards.
 
 That's it: every finished run now replies on its own. If a reply fails, the portal says why and offers
 **Retry Teams reply**. Treat the URL like a password, because anyone who has it can post in the channel
@@ -134,6 +136,8 @@ still works.
 | The test was sent, but nothing appears in Teams | Open the flow's **Run history**. The failed step shows the error. Check the link in `Channel link`. |
 | A reply appears as a new message, not in the alert's thread | None of the channel's latest 50 posts contains that tag's code followed by `\|\|` (for example `956 \|\|`). |
 | Some replies arrived, then **Teams reply not sent for …** | The portal stops at the first reply that fails. Click **Retry Teams reply**: it sends only the tags listed. |
+| The portal says the replies were sent, but none (or no screenshot) appears in Teams | The flow accepted the request but the reply failed inside it. Open the flow's **Run history**: the failed **Post reply** step says why. To go back to replies without screenshots at once, untick **Settings → Teams reply → Include the updated tag's screenshot**. |
+| A reply says *(screenshot in the portal's History)* | That tag has no screenshot to send (for example the browser blocked the capture), or it is larger than 2 MB. History has whatever was captured. |
 | The button opens the portal but no tags appear | The link must contain `#promotags=` followed by the encoded lines. If you weren't logged in, log in: the tags load right after. |
 | Only the first tag appears, with the next code stuck to its description | The Alert_Message values were joined without line breaks. Join them with a line break before encoding (in Power Automate: `decodeUriComponent('%0A')`). |
 | The button doesn't open the portal | Your PC must reach the VM: open `http://<vm-ip>/promotag/` by hand, and see [DEPLOY-VM.md](DEPLOY-VM.md), step 10. |

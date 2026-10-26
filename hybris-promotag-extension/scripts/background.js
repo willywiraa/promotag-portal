@@ -31,7 +31,7 @@ const MAIN_WORLD_FILES = ['scripts/zk-bridge.js'];
 const ISOLATED_FILES = ['scripts/zk-dom.js', 'scripts/selectors.js', 'scripts/content.js'];
 const SCRIPT_IDS = ['ptae-bridge', 'ptae-content'];
 const LOG_CAP = 500;
-const DEFAULT_SETTINGS = { baseUrl: '', roleName: 'WTCSG Backoffice User Role', confirmBeforeSave: true, teamsWebhookUrl: '' };
+const DEFAULT_SETTINGS = { baseUrl: '', roleName: 'WTCSG Backoffice User Role', confirmBeforeSave: true, teamsWebhookUrl: '', teamsScreenshots: true };
 const ACTIVE = new Set(['starting', 'running', 'awaiting_confirm']);
 const WATCHDOG = { alarm: 'ptae-watchdog', ssoMs: 180000, heartbeatMs: 90000, confirmMs: 660000, idleBatchMs: 60000 };
 const MSG_NETWORK = 'Network Error: Verify GlobalProtect VPN connection.';
@@ -181,6 +181,7 @@ async function saveSettings(input) {
   }
   if ('roleName' in input) next.roleName = String(input.roleName || '').trim() || DEFAULT_SETTINGS.roleName;
   if ('confirmBeforeSave' in input) next.confirmBeforeSave = !!input.confirmBeforeSave;
+  if ('teamsScreenshots' in input) next.teamsScreenshots = !!input.teamsScreenshots;
   if ('teamsWebhookUrl' in input) {
     const raw = String(input.teamsWebhookUrl || '').trim();
     if (raw && !Teams.parseWebhookUrl(raw)) throw new UserError("Paste the HTTP URL from your flow's trigger (it starts with https://), not a Teams link.");
@@ -533,20 +534,9 @@ async function confirmJob(jobId, approve, all) {
 }
 
 // --- screenshots ------------------------------------------------------------------------------------
-async function toWebp(dataUrl) {
-  const png = await (await fetch(dataUrl)).blob();
-  try {
-    const bmp = await createImageBitmap(png);
-    const canvas = new OffscreenCanvas(bmp.width, bmp.height);
-    canvas.getContext('2d').drawImage(bmp, 0, 0);
-    const blob = await canvas.convertToBlob({ type: 'image/webp', quality: 0.9 });
-    const out = { blob, mime: 'image/webp', width: bmp.width, height: bmp.height, bytes: blob.size };
-    if (bmp.close) bmp.close();
-    return out;
-  } catch (_) {
-    return { blob: png, mime: 'image/png', width: 0, height: 0, bytes: png.size };
-  }
-}
+// JPEG: small enough to go into the Teams replies, and the browser (or Edge on the VM) encodes it, so
+// no canvas is needed.
+const SHOT_QUALITY = 85;
 
 async function captureTab(tabId) {
   const tab = await chrome.tabs.get(tabId);
@@ -556,8 +546,10 @@ async function captureTab(tabId) {
     await chrome.tabs.update(tabId, { active: true });
     await sleep(400);
   }
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
-  return toWebp(dataUrl);
+  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: SHOT_QUALITY });
+  const blob = await (await fetch(dataUrl)).blob();
+  const size = Teams.imageSize(new Uint8Array(await blob.arrayBuffer())) || { width: 0, height: 0 };
+  return { blob, mime: blob.type || 'image/jpeg', width: size.width, height: size.height, bytes: blob.size };
 }
 
 function captureErrorText(err) {
@@ -636,8 +628,37 @@ async function postToWebhook(url, payload) {
 }
 
 /**
- * Replies under each tag's Daily Alert, one call per tag, and records which tags are done. The first
- * failure stops the rest (a wrong URL or no internet fails them all); retry sends the ones not sent.
+ * The screenshot of the updated tag for its reply, from the tag's own run: the latest "after" shot
+ * (for a failed tag the failure shot, or one taken with Capture now). Null when there is none.
+ */
+async function tagImage(item) {
+  if (!item.runId) return null;
+  try {
+    const shots = await DB.getScreenshotsForRun(item.runId);
+    const latest = (kind) => shots.filter((s) => s.kind === kind).pop();
+    const shot = latest('after') || latest('failure') || latest('manual');
+    const rec = shot && (await DB.getScreenshot(shot.id));
+    if (!rec || !rec.blob) return null;
+    return { bytes: new Uint8Array(await rec.blob.arrayBuffer()), contentType: rec.mime || rec.blob.type };
+  } catch (_) {
+    return null;
+  }
+}
+
+/** The newest screenshot in History, for the test reply. */
+async function latestImage() {
+  const { items } = await DB.listRuns({ limit: 20 }).catch(() => ({ items: [] }));
+  for (const run of items) {
+    const image = await tagImage({ runId: run.id });
+    if (image) return image;
+  }
+  return null;
+}
+
+/**
+ * Replies under each tag's Daily Alert, one call per tag with its screenshot, and records which tags
+ * are done. The first failure stops the rest (a wrong URL or no internet fails them all); retry sends
+ * the ones not sent.
  */
 async function postToTeams(batchId, retry) {
   const [settings, batch] = await Promise.all([getSettings(), getBatch()]);
@@ -645,18 +666,19 @@ async function postToTeams(batchId, retry) {
   if (!Teams.shouldPost(batch) || (batch.teams && !retry) || teamsPosting.has(batchId)) return;
   teamsPosting.add(batchId);
   const sent = (batch.teams && batch.teams.sent) || [];
-  const todo = Teams.buildPayloads({ batch }).filter((p) => !sent.includes(p.code));
-  const pending = () => todo.map((p) => p.code).filter((code) => !sent.includes(code));
+  const todo = batch.items.filter((it) => Teams.isReported(it) && !sent.includes(it.code));
+  const pending = () => todo.map((it) => it.code).filter((code) => !sent.includes(code));
   const setTeams = (status, error) => updateBatch((b) => (b.id === batchId
     ? Object.assign(b, { teams: { status, at: Date.now(), error: error || null, sent: sent.slice(), pending: pending() } })
     : b));
   try {
     await setTeams('sending');
     const hook = await teamsWebhook();
-    for (const [i, p] of todo.entries()) {
+    for (const [i, it] of todo.entries()) {
       if (i) await sleep(TEAMS_GAP_MS);
-      await postToWebhook(hook.url, p.payload);
-      sent.push(p.code);
+      const image = settings.teamsScreenshots !== false ? await tagImage(it) : undefined;
+      await postToWebhook(hook.url, Teams.buildPayload(it, image));
+      sent.push(it.code);
       await setTeams('sending');
     }
     await setTeams('sent');
@@ -679,12 +701,14 @@ async function retryTeams() {
   return { ok: true };
 }
 
-/** Posts a short test reply under the latest Daily Alert. */
+/** Posts a short test reply under the latest Daily Alert, with the newest screenshot if there is one. */
 async function sendTeamsTest() {
   const session = await requireSession();
   const hook = await teamsWebhook();
-  await postToWebhook(hook.url, Teams.buildTestPayload({ operator: session.userId }));
-  return { ok: true };
+  const image = (await getSettings()).teamsScreenshots !== false ? await latestImage() : null;
+  const payload = Teams.buildTestPayload({ operator: session.userId, image });
+  await postToWebhook(hook.url, payload);
+  return { ok: true, withScreenshot: !!payload.message.hostedContents };
 }
 
 // --- "Open in Promo Tag Portal" links -----------------------------------------------------------------

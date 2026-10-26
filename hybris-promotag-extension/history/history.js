@@ -165,7 +165,7 @@
   function openLightbox(run, shot, src) {
     $('lb-img').src = src;
     $('lb-caption').textContent = `Tag ${run.tagCode} · ${shot.kind} · ${fmt(shot.takenAt)}`;
-    const ext = shot.mime === 'image/png' ? 'png' : 'webp';
+    const ext = { 'image/jpeg': 'jpg', 'image/png': 'png' }[shot.mime] || 'webp';
     const stamp = new Date(shot.takenAt).toISOString().replace(/[:.]/g, '-');
     $('lb-download').href = src;
     $('lb-download').download = `promotag-${run.tagCode}-${shot.kind}-${stamp}.${ext}`;

@@ -114,9 +114,9 @@
       ? { loggedIn: true, userId: 'willy', expiresAt: now + 6 * 3600e3, setupRequired: false }
       : { loggedIn: false, setupRequired: view === 'setup' },
     settings: unconfigured
-      ? { baseUrl: '', roleName: '', confirmBeforeSave: true, teamsWebhookUrl: '' }
+      ? { baseUrl: '', roleName: '', confirmBeforeSave: true, teamsWebhookUrl: '', teamsScreenshots: true }
       : {
-        baseUrl: 'https://backoffice.example.com/backoffice/', roleName: 'WTCSG Backoffice User Role', confirmBeforeSave: true,
+        baseUrl: 'https://backoffice.example.com/backoffice/', roleName: 'WTCSG Backoffice User Role', confirmBeforeSave: true, teamsScreenshots: true,
         teamsWebhookUrl: 'https://default00.00.environment.api.powerplatform.com/powerautomate/automations/direct/workflows/demo/triggers/manual/paths/invoke?api-version=1&sig=demo',
       },
     access: unconfigured ? { hasOrigin: false, allUrls: false, teams: 'off' } : { hasOrigin: true, allUrls: false, teams: 'on' },
@@ -140,7 +140,7 @@
       id: 'preview',
       lastError: undefined,
       getURL: (p) => p,
-      getManifest: () => ({ version: '1.4.0' }),
+      getManifest: () => ({ version: '1.5.0' }),
       reload() {},
       sendMessage(msg, cb) {
         setTimeout(() => cb && cb(msg.type === 'UI_STATE' ? state : { ok: true }), 0);

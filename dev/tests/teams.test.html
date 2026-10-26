@@ -25,6 +25,69 @@
     return b;
   }
 
+  /** A minimal JPEG (JFIF header + frame header with the size), padded with `extra` bytes. */
+  function fakeJpeg(width, height, extra = 0) {
+    const head = [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+      0xff, 0xc0, 0x00, 0x11, 0x08, height >> 8, height & 255, width >> 8, width & 255, 0x03, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, 0xff, 0xd9];
+    const b = new Uint8Array(head.length + extra);
+    b.set(head);
+    return b;
+  }
+
+  function fakePng(width, height) {
+    const b = new Uint8Array(33);
+    b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+    new DataView(b.buffer).setUint32(16, width);
+    new DataView(b.buffer).setUint32(20, height);
+    return b;
+  }
+
+  test('screenshot size read from JPEG and PNG headers; base64 for any length', () => {
+    assertEqual(JSON.stringify(T.imageSize(fakeJpeg(1600, 900))), '{"width":1600,"height":900}');
+    assertEqual(JSON.stringify(T.imageSize(fakePng(1280, 720))), '{"width":1280,"height":720}');
+    assertEqual(T.imageSize(new Uint8Array([1, 2, 3])), null);
+    assertEqual(T.imageSize(new TextEncoder().encode('not an image, just some text here')), null);
+    const big = new Uint8Array(100000).map((_, i) => (i * 7) % 256);
+    assertEqual(atob(T.toBase64(big)).length, big.length, 'round trip, chunked');
+    assertEqual(T.toBase64(new Uint8Array([104, 105])), btoa('hi'));
+  });
+
+  test('reply with the updated tag\'s screenshot: the line, then the image inline (hostedContents)', () => {
+    const b = finished(['963', '1 FOR 10% OFF, 2 FOR 25% OFF', 'success', { oldDesc: '2 FOR $83.40' }]);
+    const jpeg = fakeJpeg(1600, 900, 50);
+    const [{ payload }] = T.buildPayloads({ batch: b, images: { 963: { bytes: jpeg, contentType: 'image/jpeg' } } });
+    assertEqual(payload.match, '963 ||');
+    assertEqual(payload.message.body.content,
+      '<p><b>963</b>&emsp;2 FOR $83.40 → 1 FOR 10% OFF, 2 FOR 25% OFF ✅</p>' +
+      '<p><img src="../hostedContents/1/$value" alt="Tag 963 after the update" width="600" height="338"></p>');
+    assertEqual(payload.message.hostedContents.length, 1);
+    const hc = payload.message.hostedContents[0];
+    assertEqual(hc['@microsoft.graph.temporaryId'], '1', 'matches the img src');
+    assertEqual(hc.contentType, 'image/jpeg');
+    assertEqual(hc.contentBytes, T.toBase64(jpeg));
+    assertEqual(Object.keys(payload).join(','), 'source,version,match,message', 'the flow reads the same fields');
+  });
+
+  test('no screenshot to send → the line and a pointer to History; screenshots off → the line only', () => {
+    const b = finished(['956', 'A', 'success', { oldDesc: 'B' }], ['959', 'C', 'failed', { code: 'NOT_FOUND', message: 'not found' }]);
+    const on = T.buildPayloads({ batch: b, images: { 956: { bytes: fakeJpeg(10, 10, T.MAX_IMAGE_BYTES), contentType: 'image/jpeg' }, 959: { bytes: fakePng(8, 8), contentType: 'image/webp' } } });
+    on.forEach(({ payload }) => {
+      assertMatch(payload.message.body.content, /\(screenshot in the portal's History\)/, 'too large, or a type Teams may not show');
+      assertEqual(payload.message.hostedContents, undefined);
+    });
+    const missing = T.buildPayloads({ batch: b, images: {} });
+    assertMatch(missing[0].payload.message.body.content, /^<p><b>956<\/b>&emsp;B → A ✅<\/p><p><i>\(screenshot in the portal's History\)<\/i><\/p>$/);
+    const off = T.buildPayloads({ batch: b });
+    assertEqual(off[0].payload.message.body.content, '<p><b>956</b>&emsp;B → A ✅</p>');
+    assertEqual(off[0].payload.message.hostedContents, undefined);
+  });
+
+  test('PNG screenshots go inline too, at their own size when narrow', () => {
+    const msg = T.buildReply(finished(['956', 'A', 'success', { oldDesc: 'B' }]).items[0], { bytes: fakePng(400, 300), contentType: 'image/png' });
+    assertMatch(msg.body.content, /width="400" height="300"/);
+    assertEqual(msg.hostedContents[0].contentType, 'image/png');
+  });
+
   test('link: built, read back and parsed into tags (documented example)', () => {
     const text = '956 || $10 OFF $99\n959 || $30 OFF $199';
     const url = T.importLink(BASE, text);
@@ -128,6 +191,10 @@
     const t = T.buildTestPayload({ operator: 'willy' });
     assertEqual(t.match, 'Daily Alert', 'test replies under the latest Daily Alert');
     assertMatch(t.message.body.content, /test reply from willy/);
+    assertEqual(t.message.hostedContents, undefined);
+    const withShot = T.buildTestPayload({ operator: 'willy', image: { bytes: fakeJpeg(1600, 900), contentType: 'image/jpeg' } });
+    assertMatch(withShot.message.body.content, /to check that screenshots arrive:<\/p><p><img src="\.\.\/hostedContents\/1\/\$value"/);
+    assertEqual(withShot.message.hostedContents.length, 1);
   });
 
   runTests();

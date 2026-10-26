@@ -208,6 +208,7 @@
     if (document.activeElement !== $('set-url')) $('set-url').value = s.baseUrl || '';
     if (document.activeElement !== $('set-role')) $('set-role').value = s.roleName || '';
     $('set-confirm').checked = s.confirmBeforeSave !== false;
+    $('set-teams-shots').checked = s.teamsScreenshots !== false;
     $('access-status').textContent = !s.baseUrl ? 'Not configured' : a.hasOrigin ? 'Access granted ✓' : 'Access not granted yet';
     $('shots-status').textContent = a.allUrls ? 'Screenshots: always allowed ✓' : 'Screenshots: when opened from the Backoffice tab';
     $('shots-btn').hidden = !!a.allUrls;
@@ -264,6 +265,7 @@
 
   $('set-role').addEventListener('change', () => saveSetting({ roleName: $('set-role').value }));
   $('set-confirm').addEventListener('change', () => saveSetting({ confirmBeforeSave: $('set-confirm').checked }));
+  $('set-teams-shots').addEventListener('change', () => saveSetting({ teamsScreenshots: $('set-teams-shots').checked }));
 
   $('shots-btn').addEventListener('click', () => {
     chrome.permissions
@@ -306,7 +308,9 @@
       if (!handleSpecialError(resp)) showError($('settings-error'), resp.error);
       return;
     }
-    $('teams-status').textContent = 'Test sent ✓ — check the latest Daily Alert thread';
+    $('teams-status').textContent = resp.withScreenshot
+      ? 'Test sent ✓ with the latest screenshot — check the latest Daily Alert thread'
+      : 'Test sent ✓ — check the latest Daily Alert thread';
   });
 
   // --- tag rows (edit) -----------------------------------------------------------------------------
@@ -958,7 +962,8 @@
     $('ss-backoffice').title = s.baseUrl || '';
     $('ss-role').textContent = s.roleName || '—';
     $('ss-confirm').textContent = s.confirmBeforeSave !== false ? 'Confirm each change' : 'Save without asking';
-    $('ss-teams').textContent = a.teams === 'on' ? 'Auto-reply on' : a.teams === 'no-access' ? 'Access not granted yet' : 'Off';
+    const shots = s.teamsScreenshots !== false ? ', with screenshot' : '';
+    $('ss-teams').textContent = a.teams === 'on' ? `Auto-reply on${shots}` : a.teams === 'no-access' ? 'Access not granted yet' : 'Off';
   }
 
   /** Beside the list (wide) or around it (popup): the confirmation, the picked tag, the run settings. */

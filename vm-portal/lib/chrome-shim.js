@@ -190,7 +190,7 @@ function createChrome(opts) {
       create: ({ url, active } = {}) => host.create(url, active),
       update: (id, props) => host.update(id, props),
       sendMessage: (id, msg) => host.command(id, msg),
-      captureVisibleTab: () => host.screenshotActive(),
+      captureVisibleTab: (windowId, options) => host.screenshotActive(options),
       onCreated: tabEvents.onCreated,
       onUpdated: tabEvents.onUpdated,
       onRemoved: tabEvents.onRemoved,

@@ -98,10 +98,14 @@ Data lives in this browser profile (IndexedDB). It stays until you delete it or 
 
 When a run finishes, the portal sends each tag's result to your Power Automate flow, which replies
 under that tag's own Daily Alert with one line, for example `959  2 FOR $82.00 → $30 OFF $199 ✅`
-(also `✅ already set` or `❌ failed`). Tags that were skipped or did not run, and failures of the
-environment (for example the VPN was down), get no reply. Screenshots and full details stay in History.
-The run view shows **Teams replies sent ✓**, or which tags weren't sent and why, with
-**Retry Teams reply** (it sends only those).
+(also `✅ already set` or `❌ failed`), and below it the screenshot of the updated tag as proof, taken
+from that tag's own run (for a failed tag, the screenshot of the failure). Tags that were skipped or
+did not run, and failures of the environment (for example the VPN was down), get no reply. All
+screenshots and full details also stay in History. The run view shows **Teams replies sent ✓**, or
+which tags weren't sent and why, with **Retry Teams reply** (it sends only those). **Settings → Teams
+reply** can leave the screenshots out.
+
+Screenshots are JPEG (since version 1.5), small enough to go into the replies.
 
 Setup (flow, workflow URL in Settings, **Send test**) and the button on the alert card are described in
 [TEAMS-SETUP.md](TEAMS-SETUP.md).
