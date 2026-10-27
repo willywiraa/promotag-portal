@@ -140,7 +140,7 @@
       id: 'preview',
       lastError: undefined,
       getURL: (p) => p,
-      getManifest: () => ({ version: '1.5.0' }),
+      getManifest: () => ({ version: '1.6.0' }),
       reload() {},
       sendMessage(msg, cb) {
         setTimeout(() => cb && cb(msg.type === 'UI_STATE' ? state : { ok: true }), 0);

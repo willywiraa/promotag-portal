@@ -99,11 +99,15 @@ Data lives in this browser profile (IndexedDB). It stays until you delete it or 
 When a run finishes, the portal sends each tag's result to your Power Automate flow, which replies
 under that tag's own Daily Alert with one line, for example `959  2 FOR $82.00 → $30 OFF $199 ✅`
 (also `✅ already set` or `❌ failed`), and below it the screenshot of the updated tag as proof, taken
-from that tag's own run (for a failed tag, the screenshot of the failure). Tags that were skipped or
-did not run, and failures of the environment (for example the VPN was down), get no reply. All
-screenshots and full details also stay in History. The run view shows **Teams replies sent ✓**, or
-which tags weren't sent and why, with **Retry Teams reply** (it sends only those). **Settings → Teams
-reply** can leave the screenshots out.
+from that tag's own run (for a failed tag, the screenshot of the failure). The last line says who ran
+it and when, for example `Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:08`: the portal user
+who started the run, and when the tag finished, in the time zone of the computer running the portal
+(the VM's, for the VM portal).
+
+Tags that were skipped or did not run, and failures of the environment (for example the VPN was
+down), get no reply. All screenshots and full details also stay in History. The run view shows
+**Teams replies sent ✓**, or which tags weren't sent and why, with **Retry Teams reply** (it sends
+only those, with their original time). **Settings → Teams reply** can leave the screenshots out.
 
 Screenshots are JPEG (since version 1.5), small enough to go into the replies.
 
@@ -180,6 +184,7 @@ dev/tools/                   credential hasher
 vm-portal/                   the portal on a VM (DEPLOY-VM.md): Node runs background.js, Playwright drives Edge
   server.js                  web server: pages, logins (cookies), page API, live updates, screenshots
   start-portal.cmd           starts the portal; update-portal.cmd pulls from GitHub and restarts it
+  run-in-background.cmd      runs it without a window from now on, started at sign-in; stop-portal.cmd stops it
   iis/web.config             IIS in front of the portal at /promotag/ (DEPLOY-VM.md, step 10)
   lib/                       chrome.* for Node, the Edge host, History on disk
   page/bootstrap.js          connects the engine in a Backoffice page to the server
@@ -201,9 +206,9 @@ The suites cover:
   fallback tier alone, and with stale-ID decoys
 - ZK input sync
 - the history database
-- the Teams reply and alert links: message building and link parsing, plus the real service worker run
-  against a stubbed browser (reply, retry, nothing posted on VPN failures, link import), and a guard that a
-  failed or unverified save never gets a ✅ reply
+- the Teams reply and alert links: message building (including the "Run by" line) and link parsing, plus
+  the real service worker run against a stubbed browser (reply, retry, nothing posted on VPN failures,
+  link import), and a guard that a failed or unverified save never gets a ✅ reply
 - a syntax check
 - an end-to-end simulation against a scripted mock Backoffice whose explorer tree filters like the real
   one: the first tag of a fresh session (also when Backoffice filters again, the dashboard refreshes in
@@ -217,7 +222,7 @@ History page into `dev\tests\ui\out\`.
 
 The VM portal has its own end-to-end test: in `vm-portal`, run `npm test`. A user opens a Teams link,
 creates a login, sets the Backoffice URL, runs two tags against the mock Backoffice, checks History and
-logs out. It also checks that private files aren't served and that the first login can't be created
-from another PC.
+logs out. It also checks that private files aren't served, that the first login can't be created
+from another PC, and that starting the portal a second time leaves the running one alone.
 
 Before using it on production data, run it against a QA Backoffice first.

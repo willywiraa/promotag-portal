@@ -10,13 +10,15 @@
  *
  * Environment (start-portal.cmd reads it from data/env.cmd): PTAE_PORT (8080), PTAE_HOST (all addresses;
  * 127.0.0.1 behind IIS), PTAE_PUBLIC_URL (the address shown for colleagues), PTAE_DATA_DIR (./data),
- * PTAE_HEADLESS=1 (no Edge window; tests only).
+ * PTAE_HEADLESS=1 (no Edge window; tests only), PTAE_BACKGROUND=1 (set by start-portal.cmd /background:
+ * no console window, the output goes to data/portal.log).
  * data/users.json: extra portal logins for this VM (entries from dev/tools/credential-hasher.html).
  * data/portal.json: port, process id and stop token of the running portal, for update-portal.ps1.
  */
 'use strict';
 const fs = require('fs');
 const http = require('http');
+const net = require('net');
 const os = require('os');
 const path = require('path');
 const vm = require('vm');
@@ -32,6 +34,7 @@ const HOST = process.env.PTAE_HOST || '';
 const PUBLIC_URL = process.env.PTAE_PUBLIC_URL || '';
 const DATA = path.resolve(process.env.PTAE_DATA_DIR || path.join(__dirname, 'data'));
 const HEADLESS = process.env.PTAE_HEADLESS === '1';
+const BACKGROUND = process.env.PTAE_BACKGROUND === '1';
 const VERSION = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8')).version;
 const UI_SENDER = { id: EXTENSION_ID, url: `chrome-extension://${EXTENSION_ID}/popup/popup.html` };
 const EXT_FOLDERS = ['popup/', 'history/', 'scripts/shared/', 'assets/'];
@@ -40,7 +43,8 @@ const HISTORY_CALLS = new Set(['listRuns', 'getRun', 'getLogs', 'getScreenshotsF
 const PAGE_CSP = "default-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
 const STATE_FILE = path.join(DATA, 'portal.json');
 const STOP_TOKEN = randomBytes(24).toString('hex');
-const EXIT_FOR_UPDATE = 3; // start-portal.cmd closes its window on this code
+const EXIT_FOR_UPDATE = 3; // stopped on purpose: start-portal.cmd closes its window or ends, without a restart
+const EXIT_ALREADY_RUNNING = 4; // another portal has the port: start-portal.cmd does not start it again
 
 fs.mkdirSync(DATA, { recursive: true });
 
@@ -139,10 +143,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (!Object.keys(out).length) return;
   const line = `data: ${JSON.stringify({ area, changes: out })}\n\n`;
   streams.forEach((res) => res.write(line));
-  // The console window doubles as a run log on the VM.
+  // The console window (or data/portal.log, which runs for days) doubles as a run log on the VM.
   const logs = (changes.logs && changes.logs.newValue) || null;
   if (logs) {
-    logs.filter((e) => e.t > printed).forEach((e) => console.log(`${new Date(e.t).toLocaleTimeString()}  ${e.msg}`));
+    const when = (t) => (BACKGROUND ? new Date(t).toLocaleString() : new Date(t).toLocaleTimeString());
+    logs.filter((e) => e.t > printed).forEach((e) => console.log(`${when(e.t)}  ${e.msg}`));
     printed = logs.length ? logs[logs.length - 1].t : printed;
   }
 });
@@ -289,8 +294,27 @@ const server = http.createServer((req, res) => {
   });
 });
 
+/** True when something already listens on the portal's port: normally this portal, already running. */
+function portTaken() {
+  return new Promise((resolve) => {
+    const probe = net.createServer();
+    probe.once('error', (err) => resolve(err.code === 'EADDRINUSE'));
+    probe.once('listening', () => probe.close(() => resolve(false)));
+    if (HOST) probe.listen(PORT, HOST);
+    else probe.listen(PORT);
+  });
+}
+
 async function main() {
   console.log(`Promo Tag Portal ${VERSION} — data in ${DATA}`);
+  // Checked before Edge starts: a second Edge on the same profile would open its windows in the running
+  // portal's Edge. Ends without shutdown(), which would remove the running portal's state file.
+  if (await portTaken()) {
+    const text = `Port ${PORT} is in use: the portal is probably running already (open http://localhost:${PORT}/ on this VM).\n` +
+      'update-portal.cmd restarts it; stop-portal.cmd stops it.\n';
+    process.stderr.write(text, () => process.exit(EXIT_ALREADY_RUNNING));
+    return;
+  }
   try {
     await host.start();
     console.log(`Microsoft Edge started${HEADLESS ? ' (headless)' : ''}.`);
@@ -301,14 +325,14 @@ async function main() {
     fs.writeFileSync(STATE_FILE, JSON.stringify({ port: PORT, pid: process.pid, token: STOP_TOKEN, started: new Date().toISOString() }));
     const others = PUBLIC_URL || (HOST ? '' : `http://${os.hostname()}:${PORT}/`);
     console.log(`Portal: http://localhost:${PORT}/  (${others ? `from other PCs: ${others}` : 'only from this VM'})`);
-    console.log('Keep this window open. Press Ctrl+C to stop.');
+    console.log(BACKGROUND ? 'Running in the background: stop-portal.cmd stops it, update-portal.cmd updates it.' : 'Keep this window open. Press Ctrl+C to stop.');
   };
   if (HOST) server.listen(PORT, HOST, ready);
   else server.listen(PORT, ready);
 }
 
 async function shutdown(code = 0) {
-  console.log(code === EXIT_FOR_UPDATE ? 'Stopping for an update…' : 'Stopping…');
+  console.log(code === EXIT_FOR_UPDATE ? 'Stopping (update-portal.cmd or stop-portal.cmd)…' : 'Stopping…');
   server.close();
   await host.stop();
   await DB.close();

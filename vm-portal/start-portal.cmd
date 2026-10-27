@@ -1,5 +1,6 @@
 @echo off
 rem Starts the Promo Tag Portal. Keep this window open; see DEPLOY-VM.md in the project folder.
+rem (run-in-background.cmd makes it run without a window instead.)
 rem Installs the portal's libraries first when they are missing (first start, or after an update
 rem that changed them).
 rem
@@ -11,16 +12,41 @@ rem   set NODE_USE_ENV_PROXY=1                         internet through a proxy 
 rem   set HTTPS_PROXY=http://proxy.example.com:8080    with the proxy address from IT
 cd /d "%~dp0"
 if exist "data\env.cmd" call "data\env.cmd"
+if /i "%~1"=="/background" goto background
 title Promo Tag Portal
 if not exist "node_modules\playwright-core\package.json" call :install || goto stopped
 node --use-system-ca server.js
-rem Exit code 3: stopped by update-portal.cmd, which starts the portal again.
+rem Exit code 3: stopped by update-portal.cmd, which starts the portal again. 4: it is already running.
 if %ERRORLEVEL% EQU 3 exit /b 0
+if %ERRORLEVEL% EQU 4 goto close
 :stopped
 echo.
-echo The portal has stopped. Press any key to close this window.
+echo The portal has stopped.
+:close
+echo Press any key to close this window.
 pause >nul
 exit /b 1
+
+:background
+rem Without a window (update-portal.ps1 starts it so): the output goes to data\portal.log, and the
+rem portal is started again 30 seconds after it stops unexpectedly. It ends when the portal was
+rem stopped on purpose (exit code 3: update-portal.cmd, stop-portal.cmd) or is already running (4).
+set "PTAE_BACKGROUND=1"
+if not exist "data" mkdir "data"
+:again
+if exist "data\portal.log" for %%F in ("data\portal.log") do if %%~zF GTR 5000000 move /y "data\portal.log" "data\portal.old.log" >nul
+call :run >>"data\portal.log" 2>&1
+if %ERRORLEVEL% EQU 3 exit /b 0
+if %ERRORLEVEL% EQU 4 exit /b 0
+ping -n 31 127.0.0.1 >nul
+goto again
+
+:run
+echo.
+echo ---- %DATE% %TIME%
+if not exist "node_modules\playwright-core\package.json" call :install || exit /b 1
+node --use-system-ca server.js
+exit /b %ERRORLEVEL%
 
 :install
 echo Installing the portal's libraries (npm ci). This takes a minute...

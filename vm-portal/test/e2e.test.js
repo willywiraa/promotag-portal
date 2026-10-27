@@ -277,6 +277,22 @@ async function main() {
       await other.close();
     });
 
+    await step('a second start says the portal is already running and ends (exit code 4) before starting Edge', async () => {
+      const second = spawn(process.execPath, ['--use-system-ca', 'server.js'], {
+        cwd: VM,
+        env: Object.assign({}, process.env, { PTAE_PORT: String(port), PTAE_DATA_DIR: dataDir, PTAE_HEADLESS: '1' }),
+      });
+      let output = '';
+      second.stdout.on('data', (d) => { output += d; });
+      second.stderr.on('data', (d) => { output += d; });
+      const code = await new Promise((resolve) => second.on('close', resolve));
+      assert.strictEqual(code, 4, output);
+      assert.match(output, /Port \d+ is in use: the portal is probably running already/);
+      assert.doesNotMatch(output, /Microsoft Edge/, 'Edge not started');
+      assert.ok(fs.existsSync(path.join(dataDir, 'portal.json')), "the running portal's state file is kept");
+      assert.strictEqual((await fetch(`${portal}ext/popup/popup.js`)).status, 200, 'the running portal still answers');
+    });
+
     await step('behind a proxy at /promotag/ (like IIS) that holds back live updates: everything still works', async () => {
       assert.strictEqual((await fetch(`${proxy}/promotag`, { redirect: 'manual' })).status, 302);
       const setup = (client) => fetch(`${proxy}/promotag/api/ui`, {

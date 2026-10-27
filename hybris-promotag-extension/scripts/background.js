@@ -471,7 +471,7 @@ async function finalize(job, result) {
   let action = 'done';
   await updateBatch((b) => {
     if (b.id !== job.batchId) return b;
-    const r = Batch.applyResult(b, job.itemIndex, Object.assign({}, result, { oldDesc, shotMissing: !!job.shotMissing }));
+    const r = Batch.applyResult(b, job.itemIndex, Object.assign({}, result, { oldDesc, shotMissing: !!job.shotMissing }), finishedAt);
     action = r.action;
     return r.batch;
   });
@@ -677,7 +677,7 @@ async function postToTeams(batchId, retry) {
     for (const [i, it] of todo.entries()) {
       if (i) await sleep(TEAMS_GAP_MS);
       const image = settings.teamsScreenshots !== false ? await tagImage(it) : undefined;
-      await postToWebhook(hook.url, Teams.buildPayload(it, image));
+      await postToWebhook(hook.url, Teams.buildPayload(it, image, batch));
       sent.push(it.code);
       await setTeams('sending');
     }

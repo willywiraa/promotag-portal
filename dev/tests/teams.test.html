@@ -10,8 +10,10 @@
   const T = PTAE.teams;
   const B = PTAE.batch;
   const BASE = 'https://backoffice.example.com/backoffice/';
+  const AT = new Date(2026, 9, 22, 15, 8, 30).getTime(); // local time, as the replies show it
+  const BY = '<p>Run by willy via Promo Tag Portal · 22 Oct 2026, 15:08</p>';
 
-  /** A batch run to the end: each arg is [code, newDesc, outcome?, resultExtra?]; no outcome = never ran. */
+  /** A batch run to the end at AT: each arg is [code, newDesc, outcome?, resultExtra?]; no outcome = never ran. */
   function finished(...rows) {
     let b = B.createBatch({
       id: 'b1', operator: 'willy', confirmBeforeSave: true,
@@ -20,7 +22,7 @@
     rows.forEach(([, , outcome, extra], i) => {
       if (!outcome || b.items[i].status !== 'pending') return;
       b = B.startItem(b, i, { jobId: `j${i}`, runId: `r${i}` });
-      b = B.applyResult(b, i, Object.assign({ outcome }, extra)).batch;
+      b = B.applyResult(b, i, Object.assign({ outcome }, extra), AT).batch;
     });
     return b;
   }
@@ -52,14 +54,15 @@
     assertEqual(T.toBase64(new Uint8Array([104, 105])), btoa('hi'));
   });
 
-  test('reply with the updated tag\'s screenshot: the line, then the image inline (hostedContents)', () => {
+  test('reply with the updated tag\'s screenshot: the line, the image inline (hostedContents), then who ran it', () => {
     const b = finished(['963', '1 FOR 10% OFF, 2 FOR 25% OFF', 'success', { oldDesc: '2 FOR $83.40' }]);
     const jpeg = fakeJpeg(1600, 900, 50);
     const [{ payload }] = T.buildPayloads({ batch: b, images: { 963: { bytes: jpeg, contentType: 'image/jpeg' } } });
     assertEqual(payload.match, '963 ||');
     assertEqual(payload.message.body.content,
       '<p><b>963</b>&emsp;2 FOR $83.40 → 1 FOR 10% OFF, 2 FOR 25% OFF ✅</p>' +
-      '<p><img src="../hostedContents/1/$value" alt="Tag 963 after the update" width="600" height="338"></p>');
+      '<p><img src="../hostedContents/1/$value" alt="Tag 963 after the update" width="600" height="338"></p>' +
+      BY);
     assertEqual(payload.message.hostedContents.length, 1);
     const hc = payload.message.hostedContents[0];
     assertEqual(hc['@microsoft.graph.temporaryId'], '1', 'matches the img src');
@@ -68,7 +71,7 @@
     assertEqual(Object.keys(payload).join(','), 'source,version,match,message', 'the flow reads the same fields');
   });
 
-  test('no screenshot to send → the line and a pointer to History; screenshots off → the line only', () => {
+  test('no screenshot to send → a pointer to History instead; screenshots off → no image', () => {
     const b = finished(['956', 'A', 'success', { oldDesc: 'B' }], ['959', 'C', 'failed', { code: 'NOT_FOUND', message: 'not found' }]);
     const on = T.buildPayloads({ batch: b, images: { 956: { bytes: fakeJpeg(10, 10, T.MAX_IMAGE_BYTES), contentType: 'image/jpeg' }, 959: { bytes: fakePng(8, 8), contentType: 'image/webp' } } });
     on.forEach(({ payload }) => {
@@ -76,10 +79,28 @@
       assertEqual(payload.message.hostedContents, undefined);
     });
     const missing = T.buildPayloads({ batch: b, images: {} });
-    assertMatch(missing[0].payload.message.body.content, /^<p><b>956<\/b>&emsp;B → A ✅<\/p><p><i>\(screenshot in the portal's History\)<\/i><\/p>$/);
+    assertEqual(missing[0].payload.message.body.content, '<p><b>956</b>&emsp;B → A ✅</p><p><i>(screenshot in the portal\'s History)</i></p>' + BY);
     const off = T.buildPayloads({ batch: b });
-    assertEqual(off[0].payload.message.body.content, '<p><b>956</b>&emsp;B → A ✅</p>');
+    assertEqual(off[0].payload.message.body.content, '<p><b>956</b>&emsp;B → A ✅</p>' + BY);
     assertEqual(off[0].payload.message.hostedContents, undefined);
+  });
+
+  test('reply: the last line says who started the run and when the tag finished', () => {
+    const b = Object.assign(finished(['963', '1 FOR 10% OFF', 'success', { oldDesc: '2 FOR $83.40' }]), { operator: 'watsons' });
+    assertEqual(T.runLabel(b, b.items[0]), 'Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:08', 'the agreed format');
+    assertMatch(T.buildPayloads({ batch: b })[0].payload.message.body.content, /✅<\/p><p>Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:08<\/p>$/);
+    const early = Object.assign({}, b.items[0], { finishedAt: new Date(2027, 0, 5, 9, 3).getTime() });
+    assertEqual(T.runLabel(b, early), 'Run by watsons via Promo Tag Portal · 5 Jan 2027, 09:03', 'day as is, time with two digits');
+    // Each tag keeps its own finish time, also when its reply is sent again later.
+    const two = finished(['956', 'A', 'success', { oldDesc: 'B' }], ['959', 'C', 'success', { oldDesc: 'D' }]);
+    two.items[1].finishedAt = AT + 60000;
+    two.updatedAt = AT + 3600000;
+    assertEqual(T.buildPayloads({ batch: two }).map((r) => /· (.*)<\/p>$/.exec(r.payload.message.body.content)[1]).join(' | '), '22 Oct 2026, 15:08 | 22 Oct 2026, 15:09');
+    // The user ID as typed at login is escaped; a run from before 1.6 (no finish time) shows its last update.
+    const odd = Object.assign({}, b, { operator: 'a<b>&c', updatedAt: AT });
+    odd.items = [Object.assign({}, b.items[0], { finishedAt: null })];
+    assertMatch(T.buildPayloads({ batch: odd })[0].payload.message.body.content, /<p>Run by a&lt;b&gt;&amp;c via Promo Tag Portal · 22 Oct 2026, 15:08<\/p>$/);
+    assertEqual(T.runLabel({ operator: '' }, {}), 'Run via Promo Tag Portal');
   });
 
   test('PNG screenshots go inline too, at their own size when narrow', () => {
@@ -147,9 +168,9 @@
     assertEqual(replies.map((r) => r.code).join(','), '956,952,957', 'skipped tag 959 gets no reply');
     assertEqual(replies.map((r) => r.payload.match).join(' | '), '956 || | 952 || | 957 ||', 'each under its own alert');
     assertEqual(replies.map((r) => r.payload.message.body.content).join('\n'), [
-      '<p><b>956</b>&emsp;$10 OFF $99 ❌ failed</p>',
-      '<p><b>952</b>&emsp;2 FOR $79.50 → 3 FOR $89 ✅</p>',
-      '<p><b>957</b>&emsp;3 FOR $119 ✅ already set</p>',
+      `<p><b>956</b>&emsp;$10 OFF $99 ❌ failed</p>${BY}`,
+      `<p><b>952</b>&emsp;2 FOR $79.50 → 3 FOR $89 ✅</p>${BY}`,
+      `<p><b>957</b>&emsp;3 FOR $119 ✅ already set</p>${BY}`,
     ].join('\n'));
     assert(replies.every((r) => r.payload.message.body.contentType === 'html' && r.payload.message.hostedContents === undefined), 'html, screenshots stay in History');
   });
@@ -161,9 +182,9 @@
       ['960', 'MEMBER $89.90', 'success', { oldDesc: '2 FOR $82.40' }]
     );
     assertEqual(T.buildPayloads({ batch: b }).map((r) => `${r.payload.match} ${r.payload.message.body.content}`).join('\n'), [
-      '964 || <p><b>964</b>&emsp;2 FOR $83.50 → 6 FOR $16.90 ✅</p>',
-      '958 || <p><b>958</b>&emsp;2 FOR $81.50 → BUY 10 GET 10 ✅</p>',
-      '960 || <p><b>960</b>&emsp;2 FOR $82.40 → MEMBER $89.90 ✅</p>',
+      `964 || <p><b>964</b>&emsp;2 FOR $83.50 → 6 FOR $16.90 ✅</p>${BY}`,
+      `958 || <p><b>958</b>&emsp;2 FOR $81.50 → BUY 10 GET 10 ✅</p>${BY}`,
+      `960 || <p><b>960</b>&emsp;2 FOR $82.40 → MEMBER $89.90 ✅</p>${BY}`,
     ].join('\n'));
   });
 
@@ -201,9 +222,9 @@
     }
     // ✅ only where Hybris shows the new value: read back after saving, or already set before.
     const ok = finished(['956', '10% OFF $70', 'success', { oldDesc: '10% OFF $80', verify: { attempts: 1, observed: '10% OFF $70', matched: true } }]);
-    assertMatch(T.buildPayloads({ batch: ok })[0].payload.message.body.content, /10% OFF \$80 → 10% OFF \$70 ✅<\/p>$/);
+    assertEqual(T.buildPayloads({ batch: ok })[0].payload.message.body.content, `<p><b>956</b>&emsp;10% OFF $80 → 10% OFF $70 ✅</p>${BY}`);
     const same = finished(['956', '10% OFF $70', 'already-up-to-date', { oldDesc: '10% OFF $70' }]);
-    assertMatch(T.buildPayloads({ batch: same })[0].payload.message.body.content, /✅ already set<\/p>$/);
+    assertEqual(T.buildPayloads({ batch: same })[0].payload.message.body.content, `<p><b>956</b>&emsp;10% OFF $70 ✅ already set</p>${BY}`);
     ['pending', 'running', 'awaiting_confirm', 'failed', 'skipped', 'stopped'].forEach((status) => {
       assert(!/✅/.test(T.replyText({ code: '956', newDesc: 'A', oldDesc: 'B', status })), `status ${status}`);
     });
@@ -229,7 +250,7 @@
     assertEqual(Object.keys(p.payload).join(','), 'source,version,match,message');
     assertEqual(p.payload.match, '956 ||');
     assertEqual(p.payload.version, 1);
-    assertEqual(p.payload.message.body.content, '<p><b>956</b>&emsp;B → A ✅</p>');
+    assertEqual(p.payload.message.body.content, `<p><b>956</b>&emsp;B → A ✅</p>${BY}`);
     const t = T.buildTestPayload({ operator: 'willy' });
     assertEqual(t.match, 'Daily Alert', 'test replies under the latest Daily Alert');
     assertMatch(t.message.body.content, /test reply from willy/);

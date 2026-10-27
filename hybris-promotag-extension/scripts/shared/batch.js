@@ -63,6 +63,7 @@
         runId: null,
         attempts: null,
         shotMissing: false,
+        finishedAt: null,
       })),
     };
   }
@@ -112,6 +113,7 @@
         errorCode: result.code || null,
         attempts: result.verify ? result.verify.attempts : null,
         shotMissing: !!result.shotMissing,
+        finishedAt: now,
       });
     }
     b.updatedAt = now;

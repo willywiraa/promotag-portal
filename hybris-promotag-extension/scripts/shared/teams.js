@@ -4,7 +4,7 @@
  *      <Backoffice URL>#promotags=<URL-encoded "code || description" lines>
  *  - the replies posted when a run finishes: one per tag, under that tag's Daily Alert, as a Microsoft
  *    Graph chatMessage handed to the user's Power Automate workflow, with the updated tag's screenshot
- *    as an inline image.
+ *    as an inline image and a last line saying who ran it and when.
  */
 (function (root) {
   'use strict';
@@ -59,6 +59,25 @@
   function replyText(it) {
     const change = it.oldDesc != null && it.oldDesc !== it.newDesc ? `${it.oldDesc} → ${it.newDesc}` : it.newDesc;
     return `${change} ${MARKS[it.status] || '⏭ not run'}`;
+  }
+
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  /** "22 Oct 2026, 15:08", in this computer's time zone (the VM's, for the VM portal). */
+  function formatWhen(ms) {
+    const d = new Date(ms);
+    const two = (n) => String(n).padStart(2, '0');
+    return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}, ${two(d.getHours())}:${two(d.getMinutes())}`;
+  }
+
+  /**
+   * "Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:08": the portal user who started the run, and
+   * when the tag finished (so a reply sent again later keeps the time of the update).
+   */
+  function runLabel(batch, it) {
+    const who = batch.operator ? `Run by ${batch.operator} via Promo Tag Portal` : 'Run via Promo Tag Portal';
+    const at = it.finishedAt || batch.updatedAt;
+    return at ? `${who} · ${formatWhen(at)}` : who;
   }
 
   // --- screenshots in replies: inline images of the Graph message (hostedContents) -------------------
@@ -116,32 +135,34 @@
   }
 
   /**
-   * Graph chatMessage for one tag: its line ("959  2 FOR $82.00 → $30 OFF $199 ✅") and the screenshot
-   * of the updated tag. image: { bytes: Uint8Array, contentType }; null when screenshots are on but
-   * none can be sent (the reply then points to History); left out for a reply with the line only.
+   * Graph chatMessage for one tag: its line ("959  2 FOR $82.00 → $30 OFF $199 ✅"), the screenshot of
+   * the updated tag, and "Run by … via Promo Tag Portal · …" from its batch (left out without one).
+   * image: { bytes: Uint8Array, contentType }; null when screenshots are on but none can be sent (the
+   * reply then points to History); left out for a reply without a screenshot.
    */
-  function buildReply(it, image) {
+  function buildReply(it, image, batch) {
     const line = `<p><b>${esc(it.code)}</b>&emsp;${esc(replyText(it))}</p>`;
-    if (image === undefined) return { body: { contentType: 'html', content: line } };
+    const by = batch ? `<p>${esc(runLabel(batch, it))}</p>` : '';
+    if (image === undefined) return { body: { contentType: 'html', content: line + by } };
     const ok = usable(image);
-    if (!ok) return { body: { contentType: 'html', content: line + NO_SHOT } };
+    if (!ok) return { body: { contentType: 'html', content: line + NO_SHOT + by } };
     const img = inlineImage(ok, `Tag ${it.code} after the update`);
-    return { body: { contentType: 'html', content: line + img.html }, hostedContents: img.hostedContents };
+    return { body: { contentType: 'html', content: line + img.html + by }, hostedContents: img.hostedContents };
   }
 
   /**
-   * Request for the workflow for one tag: the flow replies under the newest channel post containing
-   * "<code> ||" (that tag's Daily Alert), or posts a new message.
+   * Request for the workflow for one tag of the batch: the flow replies under the newest channel post
+   * containing "<code> ||" (that tag's Daily Alert), or posts a new message.
    */
-  function buildPayload(it, image) {
-    return { source: 'promo-tag-portal', version: 1, match: `${it.code} ||`, message: buildReply(it, image) };
+  function buildPayload(it, image, batch) {
+    return { source: 'promo-tag-portal', version: 1, match: `${it.code} ||`, message: buildReply(it, image, batch) };
   }
 
   /** One request per tag that reached Hybris, in run order. images: { [code]: image }, or none for lines only. */
   function buildPayloads({ batch, images }) {
     return batch.items.filter(isReported).map((it) => ({
       code: it.code,
-      payload: buildPayload(it, images ? images[it.code] || null : undefined),
+      payload: buildPayload(it, images ? images[it.code] || null : undefined, batch),
     }));
   }
 
@@ -166,6 +187,8 @@
     isReported,
     shouldPost,
     replyText,
+    formatWhen,
+    runLabel,
     imageSize,
     toBase64,
     buildReply,

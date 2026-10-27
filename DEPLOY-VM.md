@@ -72,7 +72,8 @@ portal when it isn't running). Two windows open:
 - a console window, which shows `Portal: http://localhost:8080/` and logs every run;
 - an Edge window showing **Promo Tag Portal is running**. The portal drives Backoffice in this window.
 
-Keep both open. Closing the Edge window is fine; the portal starts it again.
+Keep both open. Closing the Edge window is fine; the portal starts it again. Once everything works
+(step 8), step 9 lets the portal run without its console window.
 
 ## 5. Create your portal login (on the VM)
 
@@ -101,24 +102,35 @@ window on the VM within 3 minutes, or sign in and then run again.
 
 Open the portal (`http://<vm-ip>/promotag/` once IIS is set up in step 10, otherwise
 `http://<vm-ip>:8080/`), log in, enter one tag and click **Execute**. Confirm the change, then check
-the reply under the Daily Alert. The console window on the VM shows each step.
+the reply under the Daily Alert. The console window on the VM (in the background, step 9:
+`vm-portal\data\portal.log`) shows each step.
 
 The console window shows the address for other PCs after `from other PCs:`.
 
-## 9. Start it automatically
+## 9. Run it in the background
 
-On the VM, open PowerShell as your normal user and run:
+On the VM, double-click `C:\PromoTagPortal\vm-portal\run-in-background.cmd` once. It restarts the
+portal without its console window (never during a run) and tells Windows to start it the same way
+whenever you sign in to the VM. From then on:
 
-```powershell
-Register-ScheduledTask -TaskName 'Promo Tag Portal' `
-  -Trigger (New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME") `
-  -Action (New-ScheduledTaskAction -Execute 'C:\PromoTagPortal\vm-portal\start-portal.cmd') `
-  -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero))
-```
+- There's no window to keep open, and closing a window doesn't stop the portal. If the portal stops
+  unexpectedly, it starts again within a minute.
+- When you sign in, a window opens for a moment while the portal starts.
+- The portal's Edge window still opens. The portal drives Backoffice in it, and you sign in there
+  when the session expires (step 7).
+- What the console window showed goes to `vm-portal\data\portal.log`. Each run's log is also in
+  History.
+- `stop-portal.cmd` stops the portal. `update-portal.cmd` updates it and starts it again, as before.
 
-The portal now starts whenever you sign in to the VM. To leave the VM, close the Remote Desktop window
-with its **X** (this disconnects you). Don't use **Sign out**: that stops the portal. If IT signs out
-disconnected sessions after some hours, ask them to exempt this account.
+The portal still runs in your session, not as a Windows service, because Edge has to be visible for
+the SSO sign-in (the same reason IIS can't run it, step 10). To leave the VM, close the Remote Desktop
+window with its **X** (this disconnects you). Don't use **Sign out**: that stops the portal until you
+sign in again. After the VM restarts (for example for Windows updates), sign in once and the portal
+starts by itself. If IT signs out disconnected sessions after some hours, ask them to exempt this
+account.
+
+To go back to the console window: run `stop-portal.cmd`, delete the task **Promo Tag Portal** in Task
+Scheduler, and double-click `start-portal.cmd`.
 
 ## 10. Let colleagues in through IIS
 
@@ -152,8 +164,8 @@ server, it's installed. Do these steps in IIS Manager on the VM, as administrato
    set PTAE_PUBLIC_URL=http://10.101.32.163/promotag/
    ```
 
-   Then close the portal's console window and double-click `update-portal.cmd`; it starts the portal
-   again with these settings.
+   Then stop the portal (close its console window, or run `stop-portal.cmd` when it runs in the
+   background) and double-click `update-portal.cmd`; it starts the portal again with these settings.
 6. **Test it.** On the VM, open `http://10.101.32.163/promotag/`; create your portal login there if
    you haven't yet. Then open the same address on your laptop and log in.
 
@@ -188,9 +200,13 @@ After you change anything on your laptop:
 2. **VM:** double-click `C:\PromoTagPortal\vm-portal\update-portal.cmd`.
 
 The update script checks GitHub. If something is new, it stops the portal, pulls the changes,
-reinstalls the libraries if they changed, and starts the portal again. If nothing is new, it leaves a
-running portal alone, and starts it if it isn't running. It never stops the portal during a run; it
-tells you to try again later. It never touches `vm-portal\data`.
+reinstalls the libraries if they changed, and starts the portal again (in the background, if you did
+step 9). If nothing is new, it leaves a running portal alone, and starts it if it isn't running. It
+never stops the portal during a run; it tells you to try again later. It never touches
+`vm-portal\data`.
+
+**To restart the portal** (for example after changing `data\env.cmd` or `data\users.json`): run
+`stop-portal.cmd` (or close the console window), then double-click `update-portal.cmd`.
 
 Don't edit files in `C:\PromoTagPortal` on the VM. The update refuses to overwrite them, so make
 changes on your laptop and push them.
@@ -211,8 +227,11 @@ changes on your laptop and push them.
 
 | Problem | Fix |
 |---|---|
-| The console says **The libraries could not be installed**, or **Cannot find module 'playwright-core'** | The VM couldn't download the libraries from npm; the lines above it say why. If the VM reaches the internet through a proxy, add the two proxy lines to `data\env.cmd` (see `start-portal.cmd`). Otherwise copy `vm-portal\node_modules` from your laptop into `C:\PromoTagPortal\vm-portal\`. Then start the portal again. |
-| The console says **Microsoft Edge did not start** | Check that Edge opens normally on the VM, then restart the portal. |
+| The console (in the background: `data\portal.log`) says **The libraries could not be installed**, or **Cannot find module 'playwright-core'** | The VM couldn't download the libraries from npm; the lines above it say why. If the VM reaches the internet through a proxy, add the two proxy lines to `data\env.cmd` (see `start-portal.cmd`). Otherwise copy `vm-portal\node_modules` from your laptop into `C:\PromoTagPortal\vm-portal\`. Then start the portal again. |
+| The console (in the background: `data\portal.log`) says **Microsoft Edge did not start** | Check that Edge opens normally on the VM, then restart the portal (see [Updating](#updating)). |
+| `start-portal.cmd` says **Port 8080 is in use: the portal is probably running already** | It is, usually in the background (step 9): nothing to do. `update-portal.cmd` restarts it; `stop-portal.cmd` stops it. If `http://localhost:8080/` doesn't show the portal, see the last row. |
+| The portal is down after you signed out of the VM, or after the VM restarted | Sign in to the VM. In the background (step 9), the portal starts by itself; otherwise double-click `update-portal.cmd`. |
+| The update says **The portal did not start** | In the background, it shows the end of `data\portal.log`, which says why; otherwise the portal's console window does. Fix that, then run the update again. |
 | A run stays at **signing in (SSO)** | Sign in to Backoffice in the portal's Edge window on the VM (step 7). |
 | Microsoft sign-in says this browser or device isn't allowed, or Edge asks you to sign in to the browser | In the portal's Edge window, sign in to Edge itself with your work account (profile icon, top right), then sign in to Backoffice again. |
 | **Network Error: Verify GlobalProtect VPN connection** | The VM can't reach Backoffice. Check that the Backoffice URL opens in Edge on the VM. |
@@ -225,4 +244,4 @@ changes on your laptop and push them.
 | The update says **Could not get the updates from GitHub** | Git's own message is shown above it. Check the VM's internet access. If the token expired, create a new one (step 3). Then open **Credential Manager** → **Windows Credentials**, remove `git:https://github.com`, and run the update again; it asks for the new token. |
 | The update says files were changed on this VM | Run the command it shows to undo them, then update again. Make changes on your laptop instead. |
 | The update says **A run is in progress** | Wait until the run has finished (or skip its confirmation), then update again. |
-| Port 8080 is already in use | Add `set PTAE_PORT=<another port>` to `data\env.cmd`, change 8080 in `C:\inetpub\promotag\web.config` to match, and restart the portal. |
+| Another program already uses port 8080 | Add `set PTAE_PORT=<another port>` to `data\env.cmd`, change 8080 in `C:\inetpub\promotag\web.config` to match, and restart the portal. |

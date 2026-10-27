@@ -5,7 +5,9 @@ Version 1.2 adds two Teams features:
 - **Auto-reply.** When a run finishes, the portal replies under each tag's own Daily Alert with one
   line, for example `959  2 FOR $82.00 → $30 OFF $199 ✅` (since version 1.4; before, one reply under
   the first tag's alert listed them all), and below it a screenshot of the updated tag as proof (since
-  version 1.5). All screenshots also stay in the portal's History.
+  version 1.5). The last line says who ran it and when, for example
+  `Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:08` (since version 1.6). All screenshots
+  also stay in the portal's History.
 - **"Open in Promo Tag Portal" button** on the alert card. One click opens the portal with the tags
   already filled in.
 
@@ -51,7 +53,8 @@ concat(outputs('Messages_URL'), if(empty(body('Find_alert')), '', concat('/', co
 The portal calls the flow once for each tag that reached Hybris. Each time, the flow finds the newest
 post among the channel's latest 50 that contains that tag's code (for example `956 ||`) and replies
 under it, so every tag's result lands in its own alert's thread. If no post matches, it posts a new
-message instead. Replies show your name. Tags that were skipped or did not run get no reply.
+message instead. Replies show your name as the sender; their last line names the portal user who ran
+the tag. Tags that were skipped or did not run get no reply.
 
 ## 2. Connect the portal (2 minutes)
 
@@ -141,4 +144,4 @@ still works.
 | The button opens the portal but no tags appear | The link must contain `#promotags=` followed by the encoded lines. If you weren't logged in, log in: the tags load right after. |
 | Only the first tag appears, with the next code stuck to its description | The Alert_Message values were joined without line breaks. Join them with a line break before encoding (in Power Automate: `decodeUriComponent('%0A')`). |
 | The button doesn't open the portal | Your PC must reach the VM: open `http://<vm-ip>/promotag/` by hand, and see [DEPLOY-VM.md](DEPLOY-VM.md), step 10. |
-| The button shows **HTTP Error 502.3 - Bad Gateway** | IIS works, but the portal on the VM isn't running. On the VM, check the **Promo Tag Portal** window, or double-click `update-portal.cmd` ([DEPLOY-VM.md](DEPLOY-VM.md)). |
+| The button shows **HTTP Error 502.3 - Bad Gateway** | IIS works, but the portal on the VM isn't running. On the VM, double-click `update-portal.cmd` ([DEPLOY-VM.md](DEPLOY-VM.md)): it starts the portal, or says why it can't. |
