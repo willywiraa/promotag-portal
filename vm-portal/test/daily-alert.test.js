@@ -9,6 +9,7 @@ const os = require('os');
 const path = require('path');
 const vm = require('vm');
 const { createDailyAlert } = require('../lib/daily-alert');
+const { createFileHistoryDb } = require('../lib/file-history-db');
 
 vm.runInThisContext(fs.readFileSync(path.join(__dirname, '..', '..', 'hybris-promotag-extension', 'scripts', 'shared', 'alert-parser.js'), 'utf8'));
 const parser = globalThis.PTAE.parser;
@@ -28,11 +29,15 @@ const RUNS = [ // History, newest first
   { tagCode: '1073', outcome: 'failed', newDesc: '1 FOR 35% OFF', operator: 'willy', finishedAt: 1764000000000 },
   { tagCode: '1088', outcome: 'success', newDesc: 'ELITE 5 FOR $18.00', operator: 'willy', finishedAt: 1763900000000 },
 ];
-const historyDb = {
-  async listRuns({ tagCode }) {
-    return RUNS.filter((r) => r.tagCode === tagCode);
-  },
-};
+// The portal's own History store (lib/file-history-db.js), so the test reads History as the portal does.
+const historyDb = createFileHistoryDb(fs.mkdtempSync(path.join(os.tmpdir(), 'ptae-da-history-')), { newId: (p) => `${p}-${Math.random().toString(36).slice(2)}` });
+const historyReady = (async () => {
+  for (const [i, r] of RUNS.slice().reverse().entries()) {
+    const id = `run-${i}`;
+    await historyDb.createRun(Object.assign({ id, startedAt: r.finishedAt - 60000 + i }, r));
+    await historyDb.updateRun(id, { outcome: r.outcome, finishedAt: r.finishedAt });
+  }
+})();
 
 const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
@@ -106,6 +111,7 @@ test('a database error is passed on, without the login', async () => {
 });
 
 (async () => {
+  await historyReady;
   let failed = 0;
   for (const [name, fn] of tests) {
     try {
@@ -117,5 +123,6 @@ test('a database error is passed on, without the login', async () => {
     }
   }
   console.log(`${tests.length - failed}/${tests.length} daily-alert tests passed`);
+  await historyDb.close();
   process.exit(failed ? 1 : 0);
 })();

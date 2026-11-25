@@ -83,8 +83,8 @@ function createDailyAlert({ dataDir, historyDb, parser, query = runQuery }) {
   const configured = () => fs.existsSync(configFile);
 
   async function lastDone(code) {
-    const runs = await historyDb.listRuns({ tagCode: code, limit: 50 });
-    return runs.find((r) => DONE_OUTCOMES.has(r.outcome)) || null;
+    const { items } = await historyDb.listRuns({ tagCode: code, limit: 50 }); // newest first
+    return (items || []).find((r) => DONE_OUTCOMES.has(r.outcome)) || null;
   }
 
   async function load(days) {
