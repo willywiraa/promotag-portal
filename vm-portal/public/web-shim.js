@@ -109,7 +109,7 @@
     const link = P.teams.parseImportLink(location.href);
     if (!link) return;
     const parsed = P.parser.parseAlerts(link.text);
-    const pending = { items: parsed.items, errors: parsed.errors, warnings: parsed.warnings, at: Date.now() };
+    const pending = { items: parsed.items, errors: parsed.errors, warnings: parsed.warnings, skipped: parsed.skipped, at: Date.now() };
     sessionStorage.setItem(IMPORT_KEY, JSON.stringify(pending));
     history.replaceState(null, '', location.pathname + location.search); // a reload must not import again
   }

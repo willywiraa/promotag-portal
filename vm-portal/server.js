@@ -13,6 +13,7 @@
  * PTAE_HEADLESS=1 (no Edge window; tests only), PTAE_BACKGROUND=1 (set by start-portal.cmd /background:
  * no console window, the output goes to data/portal.log).
  * data/users.json: extra portal logins for this VM (entries from dev/tools/credential-hasher.html).
+ * data/daily-alert.json: the Daily Alert database login, written by connect-daily-alert.cmd (lib/daily-alert.js).
  * data/portal.json: port, process id and stop token of the running portal, for update-portal.ps1.
  */
 'use strict';
@@ -25,6 +26,7 @@ const vm = require('vm');
 const { randomBytes } = require('crypto');
 const { createChrome, routeBackofficeFetch, requestContext, EXTENSION_ID } = require('./lib/chrome-shim');
 const { createFileHistoryDb } = require('./lib/file-history-db');
+const { createDailyAlert } = require('./lib/daily-alert');
 const { isLocal } = require('./lib/visitor');
 
 const EXT = path.resolve(__dirname, '..', 'hybris-promotag-extension');
@@ -85,6 +87,7 @@ globalThis.importScripts = (...files) => {
 };
 runScript(path.join(EXT, 'scripts', 'background.js'));
 const DB = globalThis.PTAE.historyDb;
+const dailyAlert = createDailyAlert({ dataDir: DATA, historyDb: DB, parser: globalThis.PTAE.parser });
 chrome.runtime.onInstalled.emit({ reason: 'update' });
 
 // --- visitors' logins --------------------------------------------------------------------------------
@@ -124,8 +127,12 @@ async function handleUi(req, msg) {
     resp = { ok: false, error: `Create the first portal login on the VM itself: open http://localhost:${PORT}/ there.` };
   } else if (msg.type === 'UI_OPEN_HISTORY') {
     resp = { ok: true }; // the page opens /history itself
+  } else if (msg.type === 'UI_DAILY_ALERTS') {
+    // VM only: the extension has no database access, and its pages never show the button.
+    resp = ctx.session ? await dailyAlert.load(msg.days) : { ok: false, error: 'Portal session expired: please log in again.', code: 'AUTH' };
   } else {
     resp = await requestContext.run(ctx, () => dispatch(msg, UI_SENDER));
+    if (msg.type === 'UI_STATE' && resp && resp.ok) resp.dailyAlert = dailyAlert.configured();
   }
   if (ctx.sessionChanged && ctx.session) sessions.set(ctx.session.token, ctx.session);
   return { resp: resp || { ok: false, error: 'No response.' }, cookie: ctx.sessionChanged ? sessionCookie(ctx.session) : null };

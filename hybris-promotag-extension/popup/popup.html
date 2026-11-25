@@ -171,8 +171,28 @@
               <ol class="rows" id="rows"></ol>
               <div class="rows-tools">
                 <button type="button" class="btn btn-link" id="add-row">+ Add tag</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="da-btn" aria-expanded="false" aria-controls="da-panel" hidden>Load from Daily Alert</button>
                 <span class="hint">Tip: paste the whole Daily Alert card into any row.</span>
               </div>
+              <!-- VM portal only: promo tag alerts read from DAILY_ALERT_ARCHIVE when this opens -->
+              <section class="da" id="da-panel" aria-labelledby="da-title" hidden>
+                <div class="da-head">
+                  <h3 id="da-title">Daily Alert</h3>
+                  <div class="da-range" role="group" aria-label="Alerts from">
+                    <button type="button" class="btn btn-ghost btn-sm" data-days="1" aria-pressed="false">Today</button>
+                    <button type="button" class="btn btn-ghost btn-sm" data-days="3" aria-pressed="true">Last 3 days</button>
+                    <button type="button" class="btn btn-ghost btn-sm" data-days="7" aria-pressed="false">Last 7 days</button>
+                  </div>
+                </div>
+                <p class="da-status" id="da-status" role="status"></p>
+                <ul class="da-list" id="da-list" aria-label="Tags in the Daily Alert" hidden></ul>
+                <div class="da-foot">
+                  <button type="button" class="btn btn-link" id="da-all" hidden>Select all</button>
+                  <span class="spacer"></span>
+                  <button type="button" class="btn btn-ghost btn-sm" id="da-close">Close</button>
+                  <button type="button" class="btn btn-primary btn-sm" id="da-add" disabled>Add tags</button>
+                </div>
+              </section>
               <p class="note" id="parse-note" hidden></p>
               <p class="error" id="job-error" role="alert" hidden></p>
               <div class="panel-foot">

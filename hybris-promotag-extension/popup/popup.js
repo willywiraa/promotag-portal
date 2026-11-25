@@ -481,13 +481,22 @@
   function applyPasted(raw, at) {
     const parsed = P.parser.parseAlerts(raw);
     if (!parsed.items.length) {
-      note(parsed.errors[0] || 'No "code || description" line found in the pasted text.', true);
+      const skipped = P.parser.skippedNote(parsed.skipped);
+      note(parsed.errors[0] || (skipped ? `No promo tags in the pasted text. ${skipped}` : 'No "code || description" line found in the pasted text.'), true);
       return;
     }
-    const kept = rows.filter((r, idx) => idx !== at && (r.code.trim() || r.desc.trim()));
+    const n = mergeItems(parsed.items, at);
+    const extra = parsed.errors.concat(parsed.warnings);
+    const skipped = P.parser.skippedNote(parsed.skipped);
+    note(`${addedText(n, 'from the alert')}${skipped ? `\n${skipped}` : ''}${extra.length ? `\n${extra.join('\n')}` : ''}`, extra.length > 0);
+  }
+
+  /** Adds tags to the form; a code already there gets the new description. `replace`: a row to drop first. */
+  function mergeItems(items, replace) {
+    const kept = rows.filter((r, idx) => idx !== replace && (r.code.trim() || r.desc.trim()));
     let added = 0;
     let updated = 0;
-    for (const it of parsed.items) {
+    for (const it of items) {
       const same = kept.find((r) => r.code.trim() === it.code);
       if (same) {
         same.desc = it.desc;
@@ -500,12 +509,16 @@
     }
     rows = kept.length ? kept : [blankRow()];
     renderRows();
-    const parts = [];
-    if (added) parts.push(`${added} tag${added === 1 ? '' : 's'} added from the alert`);
-    if (updated) parts.push(`${updated} updated`);
-    const extra = parsed.errors.concat(parsed.warnings);
-    note(`${parts.join(', ')}. Check the rows, then Execute.${extra.length ? `\n${extra.join('\n')}` : ''}`, extra.length > 0);
     saveDraft();
+    return { added, updated };
+  }
+
+  function addedText({ added, updated }, from) {
+    const parts = [];
+    if (added) parts.push(`${plural(added, 'tag')} added ${from}`);
+    if (updated) parts.push(`${updated} updated`);
+    const over = rows.length > P.batch.MAX_ITEMS ? ` A run takes at most ${P.batch.MAX_ITEMS} tags: remove ${rows.length - P.batch.MAX_ITEMS} first.` : '';
+    return `${parts.join(', ')}. Check the rows, then Execute.${over}`;
   }
 
   /** Flags invalid or duplicate rows; returns true when everything is fine. */
@@ -1121,6 +1134,117 @@
     renderLogs();
   });
 
+  // --- Daily Alert archive (VM portal only: the server reads DAILY_ALERT_ARCHIVE when this opens) ------
+  let daDays = 3;
+  let daItems = [];
+  let daSeq = 0;
+
+  /** "2026-11-24T08:00:01" or a timestamp -> "24 Nov, 08:00" (in this browser's language). */
+  function fmtAlertTime(at) {
+    const d = new Date(at);
+    if (at == null || at === '' || Number.isNaN(d.getTime())) return String(at || '');
+    return d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+
+  function renderDailyAlertButton() {
+    $('da-btn').hidden = !state.dailyAlert;
+    if (!state.dailyAlert) showDailyAlert(false);
+  }
+
+  function showDailyAlert(show, focusBack) {
+    const was = !$('da-panel').hidden;
+    $('da-panel').hidden = !show;
+    $('da-btn').setAttribute('aria-expanded', String(show));
+    if (show && !was) loadDailyAlert(daDays);
+    if (!show) daSeq++; // an answer still on its way is dropped
+    if (!show && was && focusBack) $('da-btn').focus();
+  }
+
+  async function loadDailyAlert(days) {
+    daDays = days;
+    document.querySelectorAll('#da-panel [data-days]').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.days) === days)));
+    const seq = ++daSeq;
+    daItems = [];
+    renderDailyAlert('Reading the Daily Alert archive…', false);
+    const resp = await send('UI_DAILY_ALERTS', { days });
+    if (seq !== daSeq) return; // closed, or another range picked meanwhile
+    if (!resp.ok) {
+      if (!handleSpecialError(resp)) renderDailyAlert(resp.error || 'The Daily Alert could not be read.', true);
+      return;
+    }
+    daItems = resp.items.map((it) => Object.assign({ picked: !it.done }, it));
+    const range = days === 1 ? 'today' : `in the last ${days} days`;
+    const done = daItems.filter((it) => it.done).length;
+    const lines = [daItems.length
+      ? `${plural(daItems.length, 'tag')} ${range}: ${daItems.length - done} to do${done ? `, ${done} already done (History)` : ''}.`
+      : `No promo tag alerts ${range}.`];
+    if (resp.older) lines.push(`${plural(resp.older, 'older alert')} for the same tags left out: the newest alert counts.`);
+    const skipped = P.parser.skippedNote(resp.skipped);
+    if (skipped) lines.push(skipped);
+    (resp.errors || []).forEach((e) => lines.push(e));
+    renderDailyAlert(lines.join('\n'), false);
+  }
+
+  function renderDailyAlert(status, isError) {
+    const st = $('da-status');
+    st.textContent = status;
+    st.className = isError ? 'da-status error' : 'da-status';
+    const list = $('da-list');
+    list.textContent = '';
+    daItems.forEach((it) => {
+      const li = document.createElement('li');
+      const label = el('label', `da-item${it.done ? ' is-done' : ''}`);
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = it.picked;
+      box.addEventListener('change', () => {
+        it.picked = box.checked;
+        updateDailyAlertFoot();
+      });
+      const meta = [`Alert ${fmtAlertTime(it.at)}`];
+      if (it.done) meta.push(`set${it.done.by ? ` by ${it.done.by}` : ''} ${fmtAlertTime(it.done.at)}`);
+      label.append(box, el('span', 'da-code', it.code), el('span', 'da-desc', it.desc),
+        it.done ? el('span', 'chip ok', 'Done') : el('span'), el('span', 'da-meta', meta.join(' · ')));
+      li.append(label);
+      list.append(li);
+    });
+    list.hidden = !daItems.length;
+    updateDailyAlertFoot();
+  }
+
+  function updateDailyAlertFoot() {
+    const n = daItems.filter((it) => it.picked).length;
+    $('da-add').disabled = !n;
+    $('da-add').textContent = n ? `Add ${plural(n, 'tag')}` : 'Add tags';
+    $('da-all').hidden = !daItems.length;
+    $('da-all').textContent = daItems.length && n === daItems.length ? 'Select none' : 'Select all';
+  }
+
+  $('da-btn').addEventListener('click', () => showDailyAlert($('da-panel').hidden, true));
+  $('da-close').addEventListener('click', () => showDailyAlert(false, true));
+  $('da-panel').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.type === 'checkbox') e.preventDefault(); // would submit the form: Execute
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    showDailyAlert(false, true);
+  });
+  document.querySelectorAll('#da-panel [data-days]').forEach((b) => b.addEventListener('click', () => loadDailyAlert(Number(b.dataset.days))));
+  $('da-all').addEventListener('click', () => {
+    const all = daItems.every((it) => it.picked);
+    daItems.forEach((it) => { it.picked = !all; });
+    $('da-list').querySelectorAll('input[type="checkbox"]').forEach((box) => { box.checked = !all; });
+    updateDailyAlertFoot();
+  });
+  $('da-add').addEventListener('click', () => {
+    const picked = daItems.filter((it) => it.picked);
+    if (!picked.length) return;
+    const n = mergeItems(picked.map((it) => ({ code: it.code, desc: it.desc, line: it.line })), -1);
+    showDailyAlert(false);
+    showError($('job-error'), '');
+    note(addedText(n, 'from the Daily Alert'), rows.length > P.batch.MAX_ITEMS);
+    $('execute-btn').focus();
+  });
+
   // --- Daily Alert link ------------------------------------------------------------------------------
   /** Tags from an "Open in Promo Tag Portal" link replace the form, and a finished run's results. */
   async function takeImport() {
@@ -1139,8 +1263,9 @@
   function noteImport(imp) {
     const n = imp.items.length;
     const extra = imp.errors.concat(imp.warnings);
-    const head = n ? `${n} tag${n === 1 ? '' : 's'} loaded from the Daily Alert. Check them, then Execute.` : 'The Daily Alert link had no "code || description" lines.';
-    note(`${head}${extra.length ? `\n${extra.join('\n')}` : ''}`, !n || extra.length > 0);
+    const skipped = P.parser.skippedNote(imp.skipped);
+    const head = n ? `${n} tag${n === 1 ? '' : 's'} loaded from the Daily Alert. Check them, then Execute.` : 'The Daily Alert link had no promo tags.';
+    note(`${head}${skipped ? `\n${skipped}` : ''}${extra.length ? `\n${extra.join('\n')}` : ''}`, !n || extra.length > 0);
   }
 
   // --- state sync ----------------------------------------------------------------------------------
@@ -1160,6 +1285,7 @@
     const imported = resp.pendingImport && !runActive() ? await takeImport() : null;
     renderRows();
     renderPortal();
+    renderDailyAlertButton();
     if (imported) noteImport(imported);
   }
 

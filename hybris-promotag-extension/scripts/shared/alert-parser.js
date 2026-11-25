@@ -13,7 +13,7 @@
   // "(to) change(d) to", "update(d) to", "amend(ed) to", optionally followed by ":" or a dash.
   const INSTRUCTION = /(?:\bto\s+)?\b(?:change|changed|update|updated|amend|amended)\s+to\b\s*[:\-–—]?\s*/gi;
   const QUOTES = [['"', '"'], ["'", "'"], ['“', '”'], ['‘', '’']];
-  const CODE_RE = /^[^\s|]{1,64}$/;
+  const CODE_RE = /^\d{1,64}$/; // promo tag codes are always numbers
 
   function normalize(text) {
     return String(text == null ? '' : text)
@@ -47,7 +47,7 @@
 
   function validateCode(code) {
     if (!code) return 'Tag Code is required.';
-    if (!CODE_RE.test(code)) return 'Tag Code must be one word without spaces or "|" (max 64 characters).';
+    if (!CODE_RE.test(code)) return 'Tag Code must be a number (digits only).';
     return null;
   }
 
@@ -92,14 +92,20 @@
   /**
    * Every "code || description" line in a pasted alert, e.g. a whole Teams Daily Alert card:
    *   Record 1 / Alert_Datetime … / Alert_Message 888 || 3 FOR $16.65 / Record 2 / …
-   * Lines without "||" are ignored. A code listed twice keeps its last description (with a warning).
-   * @returns {{items: {code: string, desc: string, line: string}[], errors: string[], warnings: string[]}}
+   * Lines without "||" are ignored. Lines whose code has letters are other Daily Alerts
+   * ("MT || Count: 0", "TLOG || Count: 98"): they go to `skipped`, not to the tags.
+   * A code listed twice keeps its last description (with a warning).
+   * @returns {{items: {code: string, desc: string, line: string}[], errors: string[], warnings: string[], skipped: string[]}}
    */
   function parseAlerts(raw) {
-    const out = { items: [], errors: [], warnings: [] };
+    const out = { items: [], errors: [], warnings: [], skipped: [] };
     const lines = normalize(raw).split('\n').map((l) => l.trim()).filter((l) => l.includes('||'));
     for (const line of lines) {
       const r = parseAlert(line);
+      if (isOtherAlert(r)) {
+        out.skipped.push(line);
+        continue;
+      }
       if (r.error) {
         out.errors.push(`"${line}": ${r.error}`);
         continue;
@@ -117,5 +123,18 @@
     return out;
   }
 
-  PTAE.parser = { parseAlert, parseAlerts, validateCode, validateDesc, stripInstruction, normalize };
+  /** A "word || text" line whose word has letters: an alert about something other than a promo tag. */
+  function isOtherAlert(r) {
+    return r.hasDelimiter && /[A-Za-z]/.test(r.code);
+  }
+
+  /** "2 other alerts skipped (not promo tags): MT || Count: 0, TLOG || Count: 98.", or '' for none. */
+  function skippedNote(lines) {
+    if (!lines || !lines.length) return '';
+    const shown = lines.slice(0, 3).map((l) => l.replace(/^Alert_Message\s+/i, ''));
+    const more = lines.length > 3 ? `, and ${lines.length - 3} more` : '';
+    return `${lines.length} other alert${lines.length === 1 ? '' : 's'} skipped (not promo tags): ${shown.join(', ')}${more}.`;
+  }
+
+  PTAE.parser = { parseAlert, parseAlerts, isOtherAlert, skippedNote, validateCode, validateDesc, stripInstruction, normalize };
 })(globalThis);

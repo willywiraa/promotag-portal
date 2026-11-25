@@ -727,7 +727,7 @@ async function checkImportLink(tabId, url) {
   lastImport = { tabId, url, at: Date.now() };
   const parsed = PTAE.parser.parseAlerts(link.text);
   await chrome.storage.session.set({
-    [KEYS.pendingImport]: { items: parsed.items, errors: parsed.errors, warnings: parsed.warnings, at: Date.now() },
+    [KEYS.pendingImport]: { items: parsed.items, errors: parsed.errors, warnings: parsed.warnings, skipped: parsed.skipped, at: Date.now() },
   });
   chrome.tabs.update(tabId, { url: link.cleanUrl }).catch(() => {}); // a reload must not import again
   if (!Batch.isActive(await getBatch())) setBadge('import');

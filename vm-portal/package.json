@@ -6,7 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node --use-system-ca server.js",
-    "test": "node test/visitor.test.js && node --use-system-ca test/e2e.test.js"
+    "test": "node test/visitor.test.js && node test/daily-alert.test.js && node --use-system-ca test/e2e.test.js"
   },
   "engines": {
     "node": ">=22.15"

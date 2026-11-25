@@ -119,11 +119,39 @@
     assertEqual(r.items.length, 0);
   });
 
+  // The same card also carries alerts that are not promo tags.
+  const MIXED_CARD = [
+    'Record 1', 'Alert_Datetime\tNov 24 2026 8:00AM', 'Alert_Message\t1088 || ELITE 5 FOR $17.80',
+    'Record 2', 'Alert_Message\tMT || Count: 0',
+    'Record 3', 'Alert_Message', 'TLOG || Count: 98',
+    'Record 4', 'Alert_Message\tMissing PB File: 2829',
+    'Record 5', 'Alert_Message\t1073 || 1 FOR 35% OFF',
+  ].join('\n');
+
+  test('parseAlerts: alerts that are not promo tags are skipped, not added or reported as errors', () => {
+    const r = PTAE.parser.parseAlerts(MIXED_CARD);
+    assertEqual(r.items.map((i) => i.code).join(','), '1088,1073');
+    assertEqual(r.errors.length, 0, 'no errors');
+    assertEqual(r.skipped.join(' | '), 'Alert_Message\tMT || Count: 0 | TLOG || Count: 98');
+    assertEqual(PTAE.parser.skippedNote(r.skipped), '2 other alerts skipped (not promo tags): MT || Count: 0, TLOG || Count: 98.');
+    assertEqual(PTAE.parser.skippedNote([]), '');
+    assertEqual(PTAE.parser.skippedNote(['A || 1', 'B || 2', 'C || 3', 'D || 4']), '4 other alerts skipped (not promo tags): A || 1, B || 2, C || 3, and 1 more.');
+  });
+
+  test('parseAlerts: a promo line without a code is still an error', () => {
+    const r = PTAE.parser.parseAlerts('|| 10% OFF\n1088 ||');
+    assertEqual(r.items.length, 0);
+    assertEqual(r.errors.length, 2);
+    assertEqual(r.skipped.length, 0);
+  });
+
   test('validators', () => {
     assertEqual(validateCode('885'), null);
     assert(validateCode(''), 'empty code');
     assert(validateCode('88 5'), 'space in code');
     assert(validateCode('88|5'), 'pipe in code');
+    assert(validateCode('MT'), 'letters: promo tag codes are numbers');
+    assert(validateCode('885A'), 'letters after digits');
     assertEqual(validateDesc('10% OFF $70'), null);
     assert(validateDesc('   '), 'blank description');
   });

@@ -190,6 +190,19 @@ async function main() {
       assert.match(await page.textContent('#parse-note'), /2 tags loaded from the Daily Alert/);
     });
 
+    await step('Load from Daily Alert: hidden until the database is set up; reading it needs a portal login', async () => {
+      assert.ok(await page.isHidden('#da-btn'), 'no data/daily-alert.json, no button');
+      const loggedIn = await page.evaluate(() => fetch('api/ui', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'UI_DAILY_ALERTS', days: 3 }),
+      }).then((r) => r.json()));
+      assert.strictEqual(loggedIn.ok, false);
+      assert.match(loggedIn.error, /connect-daily-alert\.cmd/);
+      const anonymous = await fetch(`${portal}api/ui`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'UI_DAILY_ALERTS', days: 3 }),
+      }).then((r) => r.json());
+      assert.strictEqual(anonymous.code, 'AUTH');
+    });
+
     await step('settings: Backoffice URL and an unreachable Teams workflow', async () => {
       await page.waitForSelector('#settings-panel:not([hidden])');
       assert.ok(!(await page.isVisible('#shots-btn')), 'extension-only setting hidden');

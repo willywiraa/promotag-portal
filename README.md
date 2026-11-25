@@ -55,8 +55,12 @@ each browser keeps its own login, settings and history.
 3. Fill in the tags, one row per tag (**Tag Code** + **New Tag Description**):
    - Click **Open in Promo Tag Portal** on the Daily Alert card (once it's set up). Backoffice opens and
      the portal opens with the tags filled in. If it doesn't open, its icon shows **NEW**: click it.
+   - On the VM portal: click **Load from Daily Alert**, tick the tags and click **Add N tags**. It reads
+     the Daily Alert archive in the MasterData database ([DEPLOY-VM.md](DEPLOY-VM.md), step 12) and
+     leaves tags History shows as done unticked.
    - **Paste the whole Daily Alert card** (or any lines like `888 || 3 FOR $16.65`) into any row. Every
      `code || description` line becomes its own row, and text such as "to change to" is removed.
+     Alerts that aren't promo tags (`MT || Count: 0`) are skipped. Tag codes are numbers.
    - Or type them: **Enter** moves to the next field, **+ Add tag** adds a row, **×** removes one.
    - Up to 25 tags per run. Invalid or duplicate rows are highlighted.
 4. Click **Execute N tags**. The tags run one after another in the same Backoffice tab. The steps at the
@@ -185,8 +189,9 @@ vm-portal/                   the portal on a VM (DEPLOY-VM.md): Node runs backgr
   server.js                  web server: pages, logins (cookies), page API, live updates, screenshots
   start-portal.cmd           starts the portal; update-portal.cmd pulls from GitHub and restarts it
   run-in-background.cmd      runs it without a window from now on, started at sign-in; stop-portal.cmd stops it
+  connect-daily-alert.cmd    saves the SQL login for "Load from Daily Alert" (DEPLOY-VM.md, step 12)
   iis/web.config             IIS in front of the portal at /promotag/ (DEPLOY-VM.md, step 10)
-  lib/                       chrome.* for Node, the Edge host, History on disk
+  lib/                       chrome.* for Node, the Edge host, History on disk, the Daily Alert archive reader
   page/bootstrap.js          connects the engine in a Backoffice page to the server
   public/                    web shim that lets popup.js and history.js run as web pages
   test/e2e.test.js           end-to-end test against the mock Backoffice (npm test, needs Edge)
@@ -200,7 +205,7 @@ powershell -ExecutionPolicy Bypass -File dev\tests\run-tests.ps1
 
 The suites cover:
 
-- the alert parser
+- the alert parser, including skipping alerts that aren't promo tags
 - portal login hashing
 - selector resilience: the captured HTML snippets with the original IDs, with randomized IDs, with the
   fallback tier alone, and with stale-ID decoys
@@ -224,5 +229,7 @@ The VM portal has its own end-to-end test: in `vm-portal`, run `npm test`. A use
 creates a login, sets the Backoffice URL, runs two tags against the mock Backoffice, checks History and
 logs out. It also checks that private files aren't served, that the first login can't be created
 from another PC, and that starting the portal a second time leaves the running one alone.
+`test/daily-alert.test.js` checks **Load from Daily Alert** against a stand-in database: which archive
+rows become tags, which are left out, and which History marks as done.
 
 Before using it on production data, run it against a QA Backoffice first.

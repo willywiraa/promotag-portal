@@ -191,6 +191,33 @@ address followed by `#promotags=…`, for example `http://10.101.32.163/promotag
 exact message is in [TEAMS-SETUP.md](TEAMS-SETUP.md), step 3. An IP address can change when the VM is
 moved or rebuilt; the VM's name keeps working if it points to the same site.
 
+## 12. Load tags straight from the Daily Alert (optional)
+
+With this, **Load from Daily Alert** appears under the tag rows. It reads `DAILY_ALERT_ARCHIVE` on the
+MasterData database (10.100.32.70), the table where every Daily Alert is kept after it is sent to
+Teams. It lists that day's promo tags (or the last 3 or 7 days), with the ones History shows as done
+unticked. Tick the ones you want, click **Add N tags**, then **Execute** as usual.
+
+The portal reads the table only when someone clicks the button. It never writes to it, never checks it
+on a timer, and saves nothing in Hybris until someone clicks **Execute** and confirms. Alerts that
+aren't promo tags (`MT || Count: 0`, `TLOG || Count: 98`, `Missing PB File …`) are left out. If a tag
+has several alerts, the newest one is used.
+
+You need a SQL login that can read `DAILY_ALERT_ARCHIVE` (SQL Server authentication; the VM's Windows
+login is not accepted there). A login that can only read is best.
+
+1. Sign in to the VM as the user who runs the portal.
+2. Double-click `C:\PromoTagPortal\vm-portal\connect-daily-alert.cmd`. Press **Enter** to keep the
+   server, database and table it suggests, then type the SQL login and its password.
+3. It tries the login right away and shows the latest alerts it can read. Only then does it save
+   `data\daily-alert.json`. The password is encrypted for this Windows user on this VM, so it can't be
+   used if the file is copied elsewhere. That file is never in GitHub.
+4. Reload the portal page. The button is there for everyone who logs in to the portal. No restart is
+   needed.
+
+To change the login, run `connect-daily-alert.cmd` again. To remove it (and the button), run
+`connect-daily-alert.cmd -Remove` in a command prompt.
+
 ## Updating
 
 After you change anything on your laptop:
@@ -216,7 +243,8 @@ changes on your laptop and push them.
 - **Whose account changes Backoffice:** every run uses the Backoffice session signed in on the VM
   (yours). The portal's History records which portal user ran each change.
 - **Keep `vm-portal\data` private.** It holds the settings (including the Teams workflow URL), the
-  logins, History with screenshots, and the Edge profile with your Backoffice session.
+  logins, the Daily Alert database login (step 12), History with screenshots, and the Edge profile
+  with your Backoffice session.
 - **One run at a time.** Everyone who is logged in sees the same run and its confirm screen.
 - **Plain HTTP:** the portal uses HTTP inside the company network. With IIS, adding an HTTPS binding
   with a company certificate to the site the application sits in makes `https://<vm-name>/promotag/` work too.
@@ -244,4 +272,9 @@ changes on your laptop and push them.
 | The update says **Could not get the updates from GitHub** | Git's own message is shown above it. Check the VM's internet access. If the token expired, create a new one (step 3). Then open **Credential Manager** → **Windows Credentials**, remove `git:https://github.com`, and run the update again; it asks for the new token. |
 | The update says files were changed on this VM | Run the command it shows to undo them, then update again. Make changes on your laptop instead. |
 | The update says **A run is in progress** | Wait until the run has finished (or skip its confirmation), then update again. |
+| **Load from Daily Alert** isn't there | Run `connect-daily-alert.cmd` on the VM (step 12), then reload the page. |
+| **Could not read the Daily Alert: Login failed for user …** | The SQL login or password is wrong, or the login has no access to MasterData. Run `connect-daily-alert.cmd` again. |
+| **Could not read the Daily Alert: A network-related or instance-specific error …** | The VM can't reach 10.100.32.70 on port 1433. On the VM, `Test-NetConnection 10.100.32.70 -Port 1433` in PowerShell must say `TcpTestSucceeded : True`; if not, ask IT to open it. |
+| **Could not read the Daily Alert: Key not valid for use in specified state** | The portal runs as a different Windows user from the one who ran `connect-daily-alert.cmd`. Run it again, signed in as the user who runs the portal. |
+| **Could not read the Daily Alert: Invalid object name** or **Invalid column name** | The table isn't `dbo.DAILY_ALERT_ARCHIVE` with the columns `Alert_Datetime` and `Alert_Message`. Run `connect-daily-alert.cmd` and enter the right table name. |
 | Another program already uses port 8080 | Add `set PTAE_PORT=<another port>` to `data\env.cmd`, change 8080 in `C:\inetpub\promotag\web.config` to match, and restart the portal. |

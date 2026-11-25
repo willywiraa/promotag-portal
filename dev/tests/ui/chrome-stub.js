@@ -1,6 +1,7 @@
 /*
  * Minimal chrome.* stub so the real popup/history pages can be rendered outside the extension
  * for visual checks. ?view=login|setup|unconfigured|portal|settings|running|confirm|success|failure|result|stale
+ * |dailyalert|dailyalert-error (the VM portal's "Load from Daily Alert", opened)
  * The popup preview stores the screenshots listed in window.__previewShots in the History database.
  */
 (function () {
@@ -124,9 +125,27 @@
     batch: batches[view] || null,
     logs: view === 'failure' ? failureLogs : batches[view] ? logs : [],
     lastRunId: 'run-demo-1',
+    dailyAlert: view !== 'unconfigured',
   };
+  const dayAt = (daysAgo, hh, mm) => {
+    const d = new Date(now - daysAgo * 864e5);
+    d.setHours(hh, mm, 0, 0);
+    const two = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}T${two(hh)}:${two(mm)}:00`; // local time, like the query
+  };
+  const dailyAlerts = view === 'dailyalert-error'
+    ? { ok: false, error: "Could not read the Daily Alert: Login failed for user 'serviceSQL'." }
+    : { ok: true, days: 3, older: 1, errors: [],
+      skipped: ['MT || Count: 0', 'TLOG || Count: 98'],
+      items: [
+        { code: '1088', desc: 'ELITE 5 FOR $17.80', line: '1088 || ELITE 5 FOR $17.80', at: dayAt(0, 8, 0) },
+        { code: '1073', desc: '1 FOR 35% OFF', line: '1073 || 1 FOR 35% OFF', at: dayAt(0, 8, 0) },
+        { code: '1102', desc: 'BUY 2 SAVE $5 ON SELECTED SKINCARE AND BODY CARE RANGES', line: '1102 || BUY 2 SAVE $5 ON SELECTED SKINCARE AND BODY CARE RANGES', at: dayAt(0, 8, 0) },
+        { code: '959', desc: '$30 OFF $199', line: '959 || $30 OFF $199', at: dayAt(1, 8, 0), done: { at: t(80000), by: 'willy' } },
+        { code: '956', desc: '$10 OFF $99', line: '956 || $10 OFF $99', at: dayAt(2, 8, 0), done: { at: t(160000), by: 'watsons' } },
+      ] };
 
-  const draft = ['portal', 'stale', 'unconfigured'].includes(view)
+  const draft = ['portal', 'stale', 'unconfigured', 'dailyalert', 'dailyalert-error'].includes(view)
     ? { rows: [
       { code: '888', desc: '3 FOR $16.65', line: 'Alert_Message 888 || 3 FOR $16.65' },
       { code: '889', desc: '3 FOR $23', line: 'Alert_Message 889 || 3 FOR $23' },
@@ -140,10 +159,11 @@
       id: 'preview',
       lastError: undefined,
       getURL: (p) => p,
-      getManifest: () => ({ version: '1.6.0' }),
+      getManifest: () => ({ version: '1.7.0' }),
       reload() {},
       sendMessage(msg, cb) {
-        setTimeout(() => cb && cb(msg.type === 'UI_STATE' ? state : { ok: true }), 0);
+        const answer = msg.type === 'UI_STATE' ? state : msg.type === 'UI_DAILY_ALERTS' ? dailyAlerts : { ok: true };
+        setTimeout(() => cb && cb(answer), msg.type === 'UI_DAILY_ALERTS' ? 200 : 0);
       },
     },
     storage: {
@@ -154,5 +174,6 @@
     permissions: { request: async () => true },
   };
   window.chrome = Object.assign(window.chrome || {}, stub);
+  if (/^dailyalert/.test(view)) window.addEventListener('ptae-preview-ready', () => document.getElementById('da-btn').click());
   if (view === 'settings') window.addEventListener('ptae-preview-ready', () => document.getElementById('settings-btn').click());
 })();

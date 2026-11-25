@@ -241,8 +241,9 @@
   });
 
   test('reply: text from Hybris is escaped', () => {
-    const html = T.buildReply(finished(['<b>9</b>', 'A & B', 'success', { oldDesc: '"x"' }]).items[0]).body.content;
-    assertEqual(html, '<p><b>&lt;b&gt;9&lt;/b&gt;</b>&emsp;&quot;x&quot; → A &amp; B ✅</p>');
+    // Codes are numbers since 1.7; the code is set afterwards so its escaping stays covered.
+    const it = Object.assign({}, finished(['9', '<i>A</i> & B', 'success', { oldDesc: '"x"' }]).items[0], { code: '<b>9</b>' });
+    assertEqual(T.buildReply(it).body.content, '<p><b>&lt;b&gt;9&lt;/b&gt;</b>&emsp;&quot;x&quot; → &lt;i&gt;A&lt;/i&gt; &amp; B ✅</p>');
   });
 
   test('payloads: what the flow reads (match + Graph message), unchanged for the flow', () => {
