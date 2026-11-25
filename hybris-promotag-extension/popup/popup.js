@@ -46,7 +46,7 @@
 
   // --- helpers -----------------------------------------------------------------------------------
   function blankRow() {
-    return { code: '', desc: '', line: '' };
+    return { code: '', desc: '', line: '', at: '' }; // at: the Daily Alert card's time, when known
   }
 
   function el(tag, cls, text) {
@@ -407,6 +407,7 @@
       code.addEventListener('input', () => {
         rows[i].code = code.value;
         rows[i].line = '';
+        rows[i].at = '';
         edited(code);
       });
       desc.addEventListener('input', () => {
@@ -501,9 +502,10 @@
       if (same) {
         same.desc = it.desc;
         same.line = it.line;
+        same.at = it.at || '';
         updated++;
       } else {
-        kept.push({ code: it.code, desc: it.desc, line: it.line });
+        kept.push({ code: it.code, desc: it.desc, line: it.line, at: it.at || '' });
         added++;
       }
     }
@@ -561,7 +563,7 @@
     });
     renderRows();
     const valid = markInvalid();
-    const { items, errors } = P.batch.normalizeItems(rows.map((r) => ({ code: r.code, newDesc: r.desc, rawLine: r.line })), P.parser);
+    const { items, errors } = P.batch.normalizeItems(rows.map((r) => ({ code: r.code, newDesc: r.desc, rawLine: r.line, alertAt: r.at })), P.parser);
     if (!valid || errors.length) return showError($('job-error'), errors.slice(0, 3).join('\n') || 'Fix the highlighted rows.');
     if (!items.length) return showError($('job-error'), 'Add at least one Tag Code with its new description.');
     $('execute-btn').disabled = true;
@@ -1072,7 +1074,7 @@
   $('rs-retry').addEventListener('click', () => {
     const again = (state.batch ? state.batch.items : [])
       .filter((it) => NOT_RUN.includes(it.status))
-      .map((it) => ({ code: it.code, desc: it.newDesc, line: it.rawLine || '' }));
+      .map((it) => ({ code: it.code, desc: it.newDesc, line: it.rawLine || '', at: it.alertAt || '' }));
     newRun(again);
   });
   $('rs-teams').addEventListener('click', async () => {
@@ -1238,7 +1240,7 @@
   $('da-add').addEventListener('click', () => {
     const picked = daItems.filter((it) => it.picked);
     if (!picked.length) return;
-    const n = mergeItems(picked.map((it) => ({ code: it.code, desc: it.desc, line: it.line })), -1);
+    const n = mergeItems(picked.map((it) => ({ code: it.code, desc: it.desc, line: it.line, at: it.at })), -1);
     showDailyAlert(false);
     showError($('job-error'), '');
     note(addedText(n, 'from the Daily Alert'), rows.length > P.batch.MAX_ITEMS);
@@ -1255,7 +1257,7 @@
       if (!(await send('UI_BATCH_CLEAR')).ok) return null;
       Object.assign(state, { batch: null, job: null, logs: [] });
     }
-    rows = imp.items.length ? imp.items.map((it) => ({ code: it.code, desc: it.desc, line: it.line })) : [blankRow()];
+    rows = imp.items.length ? imp.items.map((it) => ({ code: it.code, desc: it.desc, line: it.line, at: it.at || '' })) : [blankRow()];
     saveDraft();
     return imp;
   }

@@ -79,9 +79,10 @@
       assertEqual(payload.message.hostedContents, undefined);
     });
     const missing = T.buildPayloads({ batch: b, images: {} });
-    assertEqual(missing[0].payload.message.body.content, '<p><b>956</b>&emsp;B → A ✅</p><p><i>(screenshot in the portal\'s History)</i></p>' + BY);
+    assertEqual(missing[0].payload.message.body.content, '<p><b>956</b>&emsp;B → A ✅</p><p><i>(screenshot in the portal\'s History)</i></p>');
+    assertEqual(missing[1].payload.message.body.content, '<p><b>959</b>&emsp;C ❌ failed</p><p><i>(screenshot in the portal\'s History)</i></p>' + BY, 'last reply of the card');
     const off = T.buildPayloads({ batch: b });
-    assertEqual(off[0].payload.message.body.content, '<p><b>956</b>&emsp;B → A ✅</p>' + BY);
+    assertEqual(off[0].payload.message.body.content, '<p><b>956</b>&emsp;B → A ✅</p>');
     assertEqual(off[0].payload.message.hostedContents, undefined);
   });
 
@@ -91,16 +92,40 @@
     assertMatch(T.buildPayloads({ batch: b })[0].payload.message.body.content, /✅<\/p><p>Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:08<\/p>$/);
     const early = Object.assign({}, b.items[0], { finishedAt: new Date(2027, 0, 5, 9, 3).getTime() });
     assertEqual(T.runLabel(b, early), 'Run by watsons via Promo Tag Portal · 5 Jan 2027, 09:03', 'day as is, time with two digits');
-    // Each tag keeps its own finish time, also when its reply is sent again later.
+    // Under one card, only the last reply says it, with that tag's own finish time (not the run's last update).
     const two = finished(['956', 'A', 'success', { oldDesc: 'B' }], ['959', 'C', 'success', { oldDesc: 'D' }]);
     two.items[1].finishedAt = AT + 60000;
     two.updatedAt = AT + 3600000;
-    assertEqual(T.buildPayloads({ batch: two }).map((r) => /· (.*)<\/p>$/.exec(r.payload.message.body.content)[1]).join(' | '), '22 Oct 2026, 15:08 | 22 Oct 2026, 15:09');
+    assertEqual(T.buildPayloads({ batch: two }).map((r) => (/· (.*)<\/p>$/.exec(r.payload.message.body.content) || [0, 'none'])[1]).join(' | '), 'none | 22 Oct 2026, 15:09');
     // The user ID as typed at login is escaped; a run from before 1.6 (no finish time) shows its last update.
     const odd = Object.assign({}, b, { operator: 'a<b>&c', updatedAt: AT });
     odd.items = [Object.assign({}, b.items[0], { finishedAt: null })];
     assertMatch(T.buildPayloads({ batch: odd })[0].payload.message.body.content, /<p>Run by a&lt;b&gt;&amp;c via Promo Tag Portal · 22 Oct 2026, 15:08<\/p>$/);
     assertEqual(T.runLabel({ operator: '' }, {}), 'Run via Promo Tag Portal');
+  });
+
+  test('"Run by" once per Daily Alert card: under the last reply of each card, told apart by alert time', () => {
+    const b = finished(['1073', 'A', 'success', { oldDesc: 'x' }], ['1075', 'B', 'success', { oldDesc: 'x' }],
+      ['1088', 'C', 'success', { oldDesc: 'x' }], ['1090', 'D', 'success', { oldDesc: 'x' }], ['1091', 'E', 'success', { oldDesc: 'x' }]);
+    // 1073 and 1075 pasted from Monday's card; 1088 loaded from the archive and 1090 pasted, both from
+    // Tuesday's card (same minute); 1091 typed by hand.
+    ['Nov 23 2026 8:00AM', 'Nov 23 2026 8:00AM', '2026-11-24T08:00:41', 'Nov 24 2026 8:00AM', ''].forEach((at, i) => { b.items[i].alertAt = at; });
+    const labelled = T.buildPayloads({ batch: b }).filter((r) => /Run by/.test(r.payload.message.body.content)).map((r) => r.code);
+    assertEqual(labelled.join(','), '1075,1090,1091');
+    assertEqual(T.alertKey('Nov 24 2026 8:00AM'), T.alertKey('2026-11-24T08:00:59'), 'pasted and archive times compare to the minute');
+    assertEqual(T.alertKey(''), '');
+    assertEqual(T.alertKey('not a time'), 'not a time');
+    assertEqual([...T.labelCodes([{ code: '1' }, { code: '2' }])].join(','), '2', 'no alert times: one card, label on the last');
+    assert(!/Run by/.test(T.buildReply(b.items[0], undefined, b, false).body.content), 'label false leaves it out');
+  });
+
+  test('alert times: each pasted tag keeps its record\'s Alert_Datetime, and the run keeps it', () => {
+    const r = PTAE.parser.parseAlerts('Record 1\nAlert_Datetime\tNov 23 2026 8:00AM\nAlert_Message\t1073 || A\nRecord 2\nAlert_Datetime\nNov 24 2026 8:00AM\nAlert_Message\n1088 || B\n959 || C');
+    assertEqual(r.items.map((i) => `${i.code}@${i.at}`).join(' | '), '1073@Nov 23 2026 8:00AM | 1088@Nov 24 2026 8:00AM | 959@Nov 24 2026 8:00AM');
+    assertEqual(PTAE.parser.parseAlerts('956 || A').items[0].at, '', 'plain lines: no time');
+    const items = B.normalizeItems([{ code: '1073', newDesc: 'A', alertAt: 'Nov 23 2026 8:00AM' }, { code: '959', newDesc: 'C' }], PTAE.parser).items;
+    const batch = B.createBatch({ id: 'b2', operator: 'w', items });
+    assertEqual(batch.items.map((i) => i.alertAt).join('|'), 'Nov 23 2026 8:00AM|', 'kept on the run\'s items');
   });
 
   test('PNG screenshots go inline too, at their own size when narrow', () => {
@@ -168,8 +193,8 @@
     assertEqual(replies.map((r) => r.code).join(','), '956,952,957', 'skipped tag 959 gets no reply');
     assertEqual(replies.map((r) => r.payload.match).join(' | '), '956 || | 952 || | 957 ||', 'each under its own alert');
     assertEqual(replies.map((r) => r.payload.message.body.content).join('\n'), [
-      `<p><b>956</b>&emsp;$10 OFF $99 ❌ failed</p>${BY}`,
-      `<p><b>952</b>&emsp;2 FOR $79.50 → 3 FOR $89 ✅</p>${BY}`,
+      '<p><b>956</b>&emsp;$10 OFF $99 ❌ failed</p>',
+      '<p><b>952</b>&emsp;2 FOR $79.50 → 3 FOR $89 ✅</p>',
       `<p><b>957</b>&emsp;3 FOR $119 ✅ already set</p>${BY}`,
     ].join('\n'));
     assert(replies.every((r) => r.payload.message.body.contentType === 'html' && r.payload.message.hostedContents === undefined), 'html, screenshots stay in History');
@@ -182,8 +207,8 @@
       ['960', 'MEMBER $89.90', 'success', { oldDesc: '2 FOR $82.40' }]
     );
     assertEqual(T.buildPayloads({ batch: b }).map((r) => `${r.payload.match} ${r.payload.message.body.content}`).join('\n'), [
-      `964 || <p><b>964</b>&emsp;2 FOR $83.50 → 6 FOR $16.90 ✅</p>${BY}`,
-      `958 || <p><b>958</b>&emsp;2 FOR $81.50 → BUY 10 GET 10 ✅</p>${BY}`,
+      '964 || <p><b>964</b>&emsp;2 FOR $83.50 → 6 FOR $16.90 ✅</p>',
+      '958 || <p><b>958</b>&emsp;2 FOR $81.50 → BUY 10 GET 10 ✅</p>',
       `960 || <p><b>960</b>&emsp;2 FOR $82.40 → MEMBER $89.90 ✅</p>${BY}`,
     ].join('\n'));
   });

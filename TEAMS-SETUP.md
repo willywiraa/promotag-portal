@@ -5,8 +5,9 @@ Version 1.2 adds two Teams features:
 - **Auto-reply.** When a run finishes, the portal replies under each tag's own Daily Alert with one
   line, for example `959  2 FOR $82.00 → $30 OFF $199 ✅` (since version 1.4; before, one reply under
   the first tag's alert listed them all), and below it a screenshot of the updated tag as proof (since
-  version 1.5). The last line says who ran it and when, for example
-  `Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:08` (since version 1.6). All screenshots
+  version 1.5). The last reply under each alert card ends with who ran it and when, for example
+  `Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:08` (since version 1.6; once per card since
+  version 1.8). All screenshots
   also stay in the portal's History.
 - **"Open in Promo Tag Portal" button** on the alert card. One click opens the portal with the tags
   already filled in.
@@ -53,8 +54,8 @@ concat(outputs('Messages_URL'), if(empty(body('Find_alert')), '', concat('/', co
 The portal calls the flow once for each tag that reached Hybris. Each time, the flow finds the newest
 post among the channel's latest 50 that contains that tag's code (for example `956 ||`) and replies
 under it, so every tag's result lands in its own alert's thread. If no post matches, it posts a new
-message instead. Replies show your name as the sender; their last line names the portal user who ran
-the tag. Tags that were skipped or did not run get no reply.
+message instead. Replies show your name as the sender; the last reply under each card names the portal
+user who ran the tags. Tags that were skipped or did not run get no reply.
 
 ## 2. Connect the portal (2 minutes)
 

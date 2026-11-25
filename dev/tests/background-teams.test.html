@@ -137,7 +137,7 @@
     assert(calls.hooks.every((h) => h.url === HOOK), 'signed URL used verbatim');
     assertEqual(calls.hooks.map((h) => h.body.match).join(' | '), '964 || | 958 ||');
     assertEqual(calls.hooks.map((h) => h.body.message.body.content).join('\n'),
-      `<p><b>964</b>&emsp;2 FOR $83.50 → 6 FOR $16.90 ✅</p>${BY}\n<p><b>958</b>&emsp;BUY 10 GET 10 ✅ already set</p>${BY}`);
+      `<p><b>964</b>&emsp;2 FOR $83.50 → 6 FOR $16.90 ✅</p>\n<p><b>958</b>&emsp;BUY 10 GET 10 ✅ already set</p>${BY}`, '"Run by" once, under the last reply');
     assert(calls.hooks.every((h) => h.body.message.hostedContents === undefined), 'no screenshots');
     assert((await chrome.storage.session.get('logs')).logs.some((l) => /Results sent to Teams: a reply under the Daily Alert of 964, 958/.test(l.msg)), 'logged');
     await completeBatch();
@@ -166,7 +166,8 @@
     const b64 = (bytes) => PTAE.teams.toBase64(bytes);
     assertEqual(byCode['963'].hostedContents[0].contentBytes, b64(shot.after963), '963: its latest after shot, not the before shot');
     assertEqual(byCode['963'].body.content, '<p><b>963</b>&emsp;2 FOR $83.40 → 1 FOR 10% OFF, 2 FOR 25% OFF ✅</p>' +
-      `<p><img src="../hostedContents/1/$value" alt="Tag 963 after the update" width="600" height="338"></p>${BY}`);
+      '<p><img src="../hostedContents/1/$value" alt="Tag 963 after the update" width="600" height="338"></p>');
+    assert(byCode['961'].body.content.endsWith(BY), 'the last reply of the card says who ran it');
     assertEqual(byCode['958'].hostedContents[0].contentBytes, b64(shot.after958), '958: its own screenshot');
     assertEqual(byCode['960'].hostedContents[0].contentBytes, b64(shot.failure960), '960: the failure screenshot');
     assertMatch(byCode['960'].body.content, /❌ failed/);
@@ -201,11 +202,11 @@
     await completeBatch();
     await settled();
     assertEqual(calls.hooks.length, 1);
-    assertEqual(calls.hooks[0].body.message.body.content, `<p><b>963</b>&emsp;B → A ✅</p>${BY}`);
+    assertEqual(calls.hooks[0].body.message.body.content, `<p><b>963</b>&emsp;B → A ✅</p>${BY}`, 'a single tag is its card\'s last reply');
     assertEqual(calls.hooks[0].body.message.hostedContents, undefined);
   });
 
-  test('"Run by": the user who started the run and each tag\'s finish time, also when Retry sends it later', async () => {
+  test('"Run by": once per card, the user who started the run and the tag\'s finish time, also when Retry sends it later', async () => {
     hookStatus = (body) => (body.match === '959 ||' ? 500 : 202);
     await prepare({ operator: 'watsons', screenshots: false, outcomes: [['956', 'A', 'success', { oldDesc: 'B' }], ['959', 'C', 'success', { oldDesc: 'D' }]] });
     await chrome.storage.session.set({ batch: Object.assign(store.session.batch, {
@@ -215,10 +216,11 @@
     assertEqual((await settled()).status, 'failed');
     hookStatus = 202;
     await handleUi({ type: 'UI_TEAMS_RETRY' }, SENDER); // later, by willy (the portal login of this test)
-    assertEqual(calls.hooks.map((h) => /<p>([^<]*)<\/p>$/.exec(h.body.message.body.content)[1]).join(' | '), [
-      'Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:08',
-      'Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:09',
-      'Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:09',
+    // 956 went out without the line (959, the card's last tag, carries it); 959 failed, then Retry sent it.
+    assertEqual(calls.hooks.map((h) => `${h.body.match} ${(/<p>(Run by [^<]*)<\/p>$/.exec(h.body.message.body.content) || [0, '-'])[1]}`).join(' | '), [
+      '956 || -',
+      '959 || Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:09',
+      '959 || Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:09',
     ].join(' | '));
   });
 

@@ -33,7 +33,8 @@
         errors.push(`Row ${i + 1}: Tag ${code} is listed more than once.`);
         return;
       }
-      items.push({ code, newDesc, rawLine: String((row && row.rawLine) || `${code} || ${newDesc}`) });
+      const alertAt = String((row && row.alertAt) || ''); // the Daily Alert card it came from, if known
+      items.push({ code, newDesc, rawLine: String((row && row.rawLine) || `${code} || ${newDesc}`), alertAt });
     });
     if (items.length > MAX_ITEMS) errors.push(`At most ${MAX_ITEMS} tags per run (got ${items.length}).`);
     return { items, errors };
@@ -54,6 +55,7 @@
         code: it.code,
         newDesc: it.newDesc,
         rawLine: it.rawLine,
+        alertAt: it.alertAt || '',
         status: 'pending',
         outcome: null,
         oldDesc: null,

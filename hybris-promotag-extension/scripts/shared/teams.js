@@ -135,14 +135,34 @@
   }
 
   /**
+   * The tags whose reply ends with "Run by …": the last one of each Daily Alert card, so the line shows
+   * once, at the bottom of the card's thread. A card is told apart by its alert time (Alert_Datetime, from
+   * a pasted card or the archive); tags without one count as one card. `items`: in sending order.
+   */
+  function labelCodes(items) {
+    const last = new Map();
+    items.forEach((it) => last.set(alertKey(it.alertAt), it.code));
+    return new Set(last.values());
+  }
+
+  /** The card's time to the minute, the same whether pasted ("Oct 6 2026 10:16AM") or from the archive. */
+  function alertKey(at) {
+    const s = String(at || '').trim();
+    if (!s) return '';
+    const ms = Date.parse(s.replace(/(\d)\s*([AP]M)$/i, '$1 $2'));
+    return Number.isNaN(ms) ? s : String(Math.floor(ms / 60000));
+  }
+
+  /**
    * Graph chatMessage for one tag: its line ("959  2 FOR $82.00 → $30 OFF $199 ✅"), the screenshot of
-   * the updated tag, and "Run by … via Promo Tag Portal · …" from its batch (left out without one).
+   * the updated tag, and "Run by … via Promo Tag Portal · …" from its batch when `label` is not false
+   * (the last reply under a card, see labelCodes).
    * image: { bytes: Uint8Array, contentType }; null when screenshots are on but none can be sent (the
    * reply then points to History); left out for a reply without a screenshot.
    */
-  function buildReply(it, image, batch) {
+  function buildReply(it, image, batch, label) {
     const line = `<p><b>${esc(it.code)}</b>&emsp;${esc(replyText(it))}</p>`;
-    const by = batch ? `<p>${esc(runLabel(batch, it))}</p>` : '';
+    const by = batch && label !== false ? `<p>${esc(runLabel(batch, it))}</p>` : '';
     if (image === undefined) return { body: { contentType: 'html', content: line + by } };
     const ok = usable(image);
     if (!ok) return { body: { contentType: 'html', content: line + NO_SHOT + by } };
@@ -154,15 +174,17 @@
    * Request for the workflow for one tag of the batch: the flow replies under the newest channel post
    * containing "<code> ||" (that tag's Daily Alert), or posts a new message.
    */
-  function buildPayload(it, image, batch) {
-    return { source: 'promo-tag-portal', version: 1, match: `${it.code} ||`, message: buildReply(it, image, batch) };
+  function buildPayload(it, image, batch, label) {
+    return { source: 'promo-tag-portal', version: 1, match: `${it.code} ||`, message: buildReply(it, image, batch, label) };
   }
 
   /** One request per tag that reached Hybris, in run order. images: { [code]: image }, or none for lines only. */
   function buildPayloads({ batch, images }) {
-    return batch.items.filter(isReported).map((it) => ({
+    const items = batch.items.filter(isReported);
+    const labelled = labelCodes(items);
+    return items.map((it) => ({
       code: it.code,
-      payload: buildPayload(it, images ? images[it.code] || null : undefined, batch),
+      payload: buildPayload(it, images ? images[it.code] || null : undefined, batch, labelled.has(it.code)),
     }));
   }
 
@@ -189,6 +211,8 @@
     replyText,
     formatWhen,
     runLabel,
+    labelCodes,
+    alertKey,
     imageSize,
     toBase64,
     buildReply,

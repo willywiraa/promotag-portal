@@ -94,13 +94,19 @@
    *   Record 1 / Alert_Datetime … / Alert_Message 888 || 3 FOR $16.65 / Record 2 / …
    * Lines without "||" are ignored. Lines whose code has letters are other Daily Alerts
    * ("MT || Count: 0", "TLOG || Count: 98"): they go to `skipped`, not to the tags.
-   * A code listed twice keeps its last description (with a warning).
-   * @returns {{items: {code: string, desc: string, line: string}[], errors: string[], warnings: string[], skipped: string[]}}
+   * A code listed twice keeps its last description (with a warning). `at` is the record's Alert_Datetime
+   * when the card shows one (it tells the cards apart for the Teams reply), otherwise ''.
+   * @returns {{items: {code: string, desc: string, line: string, at: string}[], errors: string[], warnings: string[], skipped: string[]}}
    */
   function parseAlerts(raw) {
     const out = { items: [], errors: [], warnings: [], skipped: [] };
-    const lines = normalize(raw).split('\n').map((l) => l.trim()).filter((l) => l.includes('||'));
-    for (const line of lines) {
+    const all = normalize(raw).split('\n').map((l) => l.trim()).filter(Boolean);
+    let at = '';
+    for (const [i, line] of all.entries()) {
+      if (/^Record\s+\d+$/i.test(line)) at = '';
+      const when = /^Alert_Datetime(?:\s*:)?(?:\s+(.*))?$/i.exec(line);
+      if (when) at = (when[1] || (all[i + 1] && !all[i + 1].includes('||') ? all[i + 1] : '')).replace(/\s+/g, ' ');
+      if (!line.includes('||')) continue;
       const r = parseAlert(line);
       if (isOtherAlert(r)) {
         out.skipped.push(line);
@@ -115,8 +121,9 @@
         if (existing.desc !== r.desc) out.warnings.push(`Tag ${r.code} appears more than once; using "${r.desc}".`);
         existing.desc = r.desc;
         existing.line = line;
+        existing.at = at;
       } else {
-        out.items.push({ code: r.code, desc: r.desc, line });
+        out.items.push({ code: r.code, desc: r.desc, line, at });
       }
       r.warnings.forEach((w) => out.warnings.push(w));
     }

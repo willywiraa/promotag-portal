@@ -103,10 +103,12 @@ Data lives in this browser profile (IndexedDB). It stays until you delete it or 
 When a run finishes, the portal sends each tag's result to your Power Automate flow, which replies
 under that tag's own Daily Alert with one line, for example `959  2 FOR $82.00 → $30 OFF $199 ✅`
 (also `✅ already set` or `❌ failed`), and below it the screenshot of the updated tag as proof, taken
-from that tag's own run (for a failed tag, the screenshot of the failure). The last line says who ran
-it and when, for example `Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:08`: the portal user
-who started the run, and when the tag finished, in the time zone of the computer running the portal
-(the VM's, for the VM portal).
+from that tag's own run (for a failed tag, the screenshot of the failure). Under each Daily Alert
+card, the last reply ends with who ran it and when, for example
+`Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:08`: the portal user who started the run, and
+when that tag finished, in the time zone of the computer running the portal (the VM's, for the VM
+portal). Tags are matched to their card by the alert time that came with them, from a pasted card or
+**Load from Daily Alert**. Tags without one (typed, or from a link) count as one card.
 
 Tags that were skipped or did not run, and failures of the environment (for example the VPN was
 down), get no reply. All screenshots and full details also stay in History. The run view shows
