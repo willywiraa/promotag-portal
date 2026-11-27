@@ -107,8 +107,10 @@ from that tag's own run (for a failed tag, the screenshot of the failure). Under
 card, the last reply ends with who ran it and when, for example
 `Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:08`: the portal user who started the run, and
 when that tag finished, in the time zone of the computer running the portal (the VM's, for the VM
-portal). Tags are matched to their card by the alert time that came with them, from a pasted card or
-**Load from Daily Alert**. Tags without one (typed, or from a link) count as one card.
+portal). The flow decides which reply is a card's last, because only it sees which alert each reply
+goes under: each call lists the tags still to come ([TEAMS-SETUP.md](TEAMS-SETUP.md), step 1, action
+**e**). A flow made before version 1.9 needs that action added; until then the portal guesses from
+the tags' alert times, and the line can repeat within a card.
 
 Tags that were skipped or did not run, and failures of the environment (for example the VPN was
 down), get no reply. All screenshots and full details also stay in History. The run view shows

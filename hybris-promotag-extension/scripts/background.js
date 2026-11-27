@@ -674,13 +674,15 @@ async function postToTeams(batchId, retry) {
   try {
     await setTeams('sending');
     const hook = await teamsWebhook();
-    // "Run by …" only under the last reply of each card. A retry labels the last of what it sends: the
-    // replies it sends come after the ones already in the thread.
+    // "Run by …" only under the last reply of each card: each request names the tags still to come, and
+    // the flow adds the line when its post holds none of them (labelled: the guess for an older flow).
+    // A retry counts only what it sends: those replies come after the ones already in the thread.
     const labelled = Teams.labelCodes(todo);
     for (const [i, it] of todo.entries()) {
       if (i) await sleep(TEAMS_GAP_MS);
       const image = settings.teamsScreenshots !== false ? await tagImage(it) : undefined;
-      await postToWebhook(hook.url, Teams.buildPayload(it, image, batch, labelled.has(it.code)));
+      const later = todo.slice(i + 1).map((t) => t.code);
+      await postToWebhook(hook.url, Teams.buildPayload(it, image, batch, labelled.has(it.code), later));
       sent.push(it.code);
       await setTeams('sending');
     }

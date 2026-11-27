@@ -6,9 +6,12 @@ Version 1.2 adds two Teams features:
   line, for example `959  2 FOR $82.00 → $30 OFF $199 ✅` (since version 1.4; before, one reply under
   the first tag's alert listed them all), and below it a screenshot of the updated tag as proof (since
   version 1.5). The last reply under each alert card ends with who ran it and when, for example
-  `Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:08` (since version 1.6; once per card since
-  version 1.8). All screenshots
-  also stay in the portal's History.
+  `Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:08` (since version 1.6; once per card, at
+  the bottom, since version 1.9 with the flow from step 1). All screenshots also stay in the portal's
+  History.
+
+**Made the flow before version 1.9?** Update it as in [Update an existing flow](#update-an-existing-flow-version-19).
+Until then, "Run by …" can show under more than one reply of the same card.
 - **"Open in Promo Tag Portal" button** on the alert card. One click opens the portal with the tags
   already filled in.
 
@@ -33,7 +36,8 @@ runs on a VM ([DEPLOY-VM.md](DEPLOY-VM.md)); the extension works the same way ex
 | b | **Compose** | `Messages URL` | Inputs, *expression* **A** below |
 | c | **Send a Microsoft Graph HTTP request** (Microsoft Teams) | `Get alerts` | URI, *expression*: `concat(outputs('Messages_URL'), '?$top=50')`<br>Method: **GET** |
 | d | **Filter array** | `Find alert` | From, *expression*: `body('Get_alerts')?['value']`<br>Filter Query: click **Edit in advanced mode** and paste `@contains(string(item()), triggerBody()?['match'])` |
-| e | **Send a Microsoft Graph HTTP request** | `Post reply` | URI, *expression* **B** below<br>Method: **POST**<br>Body (under Advanced parameters), *expression*: `string(triggerBody()?['message'])` |
+| e | **Filter array** | `Later tags here` | From, *expression*: `coalesce(triggerBody()?['later'], json('[]'))`<br>Filter Query: click **Edit in advanced mode** and paste `@contains(string(last(sort(body('Find_alert'), 'createdDateTime'))), item())` |
+| f | **Send a Microsoft Graph HTTP request** | `Post reply` | URI, *expression* **B** below<br>Method: **POST**<br>Body (under Advanced parameters), *expression* **C** below |
 
 Expression **A**:
 
@@ -47,6 +51,12 @@ Expression **B**:
 concat(outputs('Messages_URL'), if(empty(body('Find_alert')), '', concat('/', coalesce(last(sort(body('Find_alert'), 'createdDateTime'))?['id'], ''), '/replies')))
 ```
 
+Expression **C**:
+
+```
+string(setProperty(triggerBody()?['message'], 'body', setProperty(triggerBody()?['message']?['body'], 'content', concat(coalesce(triggerBody()?['content'], triggerBody()?['message']?['body']?['content']), if(empty(body('Later_tags_here')), coalesce(triggerBody()?['label'], ''), '')))))
+```
+
 4. Click **Save**. Then click the trigger card (**When a Teams webhook request is received**). In its
    panel, copy **HTTP URL** with the copy button at the end of the field. If you are on the flow's
    details page, click **Edit** first. The browser's address bar is not this URL.
@@ -54,8 +64,22 @@ concat(outputs('Messages_URL'), if(empty(body('Find_alert')), '', concat('/', co
 The portal calls the flow once for each tag that reached Hybris. Each time, the flow finds the newest
 post among the channel's latest 50 that contains that tag's code (for example `956 ||`) and replies
 under it, so every tag's result lands in its own alert's thread. If no post matches, it posts a new
-message instead. Replies show your name as the sender; the last reply under each card names the portal
-user who ran the tags. Tags that were skipped or did not run get no reply.
+message instead. Each call also lists the tags still to come; **Later tags here** keeps the ones that
+are in the same alert, and only when there are none does **Post reply** add the "Run by …" line. That
+way the line shows once per card, under its last reply. Replies show your name as the sender. Tags
+that were skipped or did not run get no reply.
+
+### Update an existing flow (version 1.9)
+
+If you made the flow before version 1.9, it has actions a to e, and the last one is **Post reply**.
+Two changes, about 3 minutes. The HTTP URL stays the same, so the portal needs no change.
+
+1. Open the flow and click **Edit**. Hover over the arrow between **Find alert** and **Post reply**,
+   click **+** → **Add an action**, and add **Filter array**. Rename it `Later tags here` and set it up
+   as action **e** in the table above. It must sit between **Find alert** and **Post reply**.
+2. Click **Post reply**. Under **Advanced parameters**, click the purple **fx** pill in **Body**, delete
+   it, and add expression **C** above in its place.
+3. Click **Save**. The next run's replies show "Run by …" once per card.
 
 ## 2. Connect the portal (2 minutes)
 
@@ -134,10 +158,12 @@ still works.
 
 | Problem | Fix |
 |---|---|
-| **Save** fails with "contains invalid expression(s)" | The actions must be named exactly `Channel link`, `Messages URL`, `Get alerts`, `Find alert` and `Post reply`, and every expression must show as a purple **fx** pill. |
+| **Save** fails with "contains invalid expression(s)" | The actions must be named exactly `Channel link`, `Messages URL`, `Get alerts`, `Find alert`, `Later tags here` and `Post reply`, and every expression must show as a purple **fx** pill. |
 | **Get alerts** fails with "URI path is not a valid Graph endpoint" | An expression was pasted as plain text. In the failed run, click **Messages URL**: its output must start with `https://graph.microsoft.com/v1.0/teams/`. Re-enter expression **A** and the **Get alerts** URI with **fx**. |
 | **Send test** says the workflow refused the request | Set the trigger's **Who can trigger the flow?** to **Anyone**. |
 | The test was sent, but nothing appears in Teams | Open the flow's **Run history**. The failed step shows the error. Check the link in `Channel link`. |
+| "Run by …" shows under more than one reply of the same card | The flow is from before version 1.9: [update it](#update-an-existing-flow-version-19). |
+| **Save** fails with an error about `Later_tags_here` | The new **Filter array** must be named exactly `Later tags here` and sit between **Find alert** and **Post reply**. |
 | A reply appears as a new message, not in the alert's thread | None of the channel's latest 50 posts contains that tag's code followed by `\|\|` (for example `956 \|\|`). |
 | Some replies arrived, then **Teams reply not sent for …** | The portal stops at the first reply that fails. Click **Retry Teams reply**: it sends only the tags listed. |
 | The portal says the replies were sent, but none (or no screenshot) appears in Teams | The flow accepted the request but the reply failed inside it. Open the flow's **Run history**: the failed **Post reply** step says why. To go back to replies without screenshots at once, untick **Settings → Teams reply → Include the updated tag's screenshot**. |

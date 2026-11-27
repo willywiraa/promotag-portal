@@ -159,7 +159,7 @@
       id: 'preview',
       lastError: undefined,
       getURL: (p) => p,
-      getManifest: () => ({ version: '1.8.0' }),
+      getManifest: () => ({ version: '1.9.0' }),
       reload() {},
       sendMessage(msg, cb) {
         const answer = msg.type === 'UI_STATE' ? state : msg.type === 'UI_DAILY_ALERTS' ? dailyAlerts : { ok: true };

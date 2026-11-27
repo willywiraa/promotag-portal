@@ -68,7 +68,9 @@
     assertEqual(hc['@microsoft.graph.temporaryId'], '1', 'matches the img src');
     assertEqual(hc.contentType, 'image/jpeg');
     assertEqual(hc.contentBytes, T.toBase64(jpeg));
-    assertEqual(Object.keys(payload).join(','), 'source,version,match,message', 'the flow reads the same fields');
+    assertEqual(Object.keys(payload).join(','), 'source,version,match,message,content,label,later', 'the fields the flow reads');
+    assertEqual(payload.content, payload.message.body.content.slice(0, -BY.length), 'content: the same reply without the line');
+    assertEqual(payload.label, BY);
   });
 
   test('no screenshot to send → a pointer to History instead; screenshots off → no image', () => {
@@ -271,14 +273,22 @@
     assertEqual(T.buildReply(it).body.content, '<p><b>&lt;b&gt;9&lt;/b&gt;</b>&emsp;&quot;x&quot; → &lt;i&gt;A&lt;/i&gt; &amp; B ✅</p>');
   });
 
-  test('payloads: what the flow reads (match + Graph message), unchanged for the flow', () => {
-    const [p] = T.buildPayloads({ batch: finished(['956', 'A', 'success', { oldDesc: 'B' }]) });
-    assertEqual(Object.keys(p.payload).join(','), 'source,version,match,message');
+  test('payloads: what the flow reads (match, message; content, label and later for the updated flow)', () => {
+    const [p, q] = T.buildPayloads({ batch: finished(['956', 'A', 'success', { oldDesc: 'B' }], ['959', 'C', 'success', { oldDesc: 'D' }]) });
+    assertEqual(Object.keys(p.payload).join(','), 'source,version,match,message,content,label,later');
     assertEqual(p.payload.match, '956 ||');
-    assertEqual(p.payload.version, 1);
-    assertEqual(p.payload.message.body.content, `<p><b>956</b>&emsp;B → A ✅</p>${BY}`);
+    assertEqual(p.payload.version, 2);
+    assertEqual(p.payload.message.body.content, '<p><b>956</b>&emsp;B → A ✅</p>', 'message: the guess for a flow not updated yet');
+    assertEqual(p.payload.content, '<p><b>956</b>&emsp;B → A ✅</p>');
+    assertEqual(p.payload.label, BY, 'the line on its own, for the flow to add');
+    assertEqual(JSON.stringify(p.payload.later), '["959 ||"]', 'tags sent after this one');
+    assertEqual(JSON.stringify(q.payload.later), '[]');
+    assertEqual(q.payload.message.body.content, `<p><b>959</b>&emsp;D → C ✅</p>${BY}`);
     const t = T.buildTestPayload({ operator: 'willy' });
     assertEqual(t.match, 'Daily Alert', 'test replies under the latest Daily Alert');
+    assertEqual(t.content, t.message.body.content, 'the updated flow posts the test reply as it is');
+    assertEqual(t.label, '');
+    assertEqual(JSON.stringify(t.later), '[]');
     assertMatch(t.message.body.content, /test reply from willy/);
     assertEqual(t.message.hostedContents, undefined);
     const withShot = T.buildTestPayload({ operator: 'willy', image: { bytes: fakeJpeg(1600, 900), contentType: 'image/jpeg' } });

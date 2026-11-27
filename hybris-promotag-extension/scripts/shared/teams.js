@@ -135,9 +135,11 @@
   }
 
   /**
-   * The tags whose reply ends with "Run by …": the last one of each Daily Alert card, so the line shows
-   * once, at the bottom of the card's thread. A card is told apart by its alert time (Alert_Datetime, from
-   * a pasted card or the archive); tags without one count as one card. `items`: in sending order.
+   * The portal's own guess at which replies end a card's thread, for a flow that still posts `message`
+   * as it is (TEAMS-SETUP.md before version 1.9): the last tag of each alert time (Alert_Datetime, from a
+   * pasted card or the archive); tags without one count as one card. An updated flow decides itself
+   * from `later` (see buildPayload), because only it sees which post each tag goes under.
+   * `items`: in sending order.
    */
   function labelCodes(items) {
     const last = new Map();
@@ -161,30 +163,55 @@
    * reply then points to History); left out for a reply without a screenshot.
    */
   function buildReply(it, image, batch, label) {
+    const parts = replyParts(it, image);
+    const by = batch && label !== false ? byLine(batch, it) : '';
+    const message = { body: { contentType: 'html', content: parts.content + by } };
+    if (parts.hostedContents) message.hostedContents = parts.hostedContents;
+    return message;
+  }
+
+  /** The reply without "Run by …": its line, then the screenshot or the pointer to History. */
+  function replyParts(it, image) {
     const line = `<p><b>${esc(it.code)}</b>&emsp;${esc(replyText(it))}</p>`;
-    const by = batch && label !== false ? `<p>${esc(runLabel(batch, it))}</p>` : '';
-    if (image === undefined) return { body: { contentType: 'html', content: line + by } };
+    if (image === undefined) return { content: line };
     const ok = usable(image);
-    if (!ok) return { body: { contentType: 'html', content: line + NO_SHOT + by } };
+    if (!ok) return { content: line + NO_SHOT };
     const img = inlineImage(ok, `Tag ${it.code} after the update`);
-    return { body: { contentType: 'html', content: line + img.html + by }, hostedContents: img.hostedContents };
+    return { content: line + img.html, hostedContents: img.hostedContents };
+  }
+
+  function byLine(batch, it) {
+    return `<p>${esc(runLabel(batch, it))}</p>`;
   }
 
   /**
    * Request for the workflow for one tag of the batch: the flow replies under the newest channel post
    * containing "<code> ||" (that tag's Daily Alert), or posts a new message.
+   * - message: the reply as the portal guesses it (label: see labelCodes), for a flow not updated yet;
+   * - content + label: the reply's HTML without "Run by …", and that line on its own;
+   * - later: "<code> ||" of the tags sent after this one. The updated flow (TEAMS-SETUP.md, step 1) adds
+   *   `label` only when the post it replies under contains none of them: the card's last reply.
    */
-  function buildPayload(it, image, batch, label) {
-    return { source: 'promo-tag-portal', version: 1, match: `${it.code} ||`, message: buildReply(it, image, batch, label) };
+  function buildPayload(it, image, batch, label, later) {
+    const message = buildReply(it, image, batch, label);
+    return {
+      source: 'promo-tag-portal',
+      version: 2,
+      match: `${it.code} ||`,
+      message,
+      content: replyParts(it, image).content,
+      label: batch ? byLine(batch, it) : '',
+      later: (later || []).map((code) => `${code} ||`),
+    };
   }
 
   /** One request per tag that reached Hybris, in run order. images: { [code]: image }, or none for lines only. */
   function buildPayloads({ batch, images }) {
     const items = batch.items.filter(isReported);
     const labelled = labelCodes(items);
-    return items.map((it) => ({
+    return items.map((it, i) => ({
       code: it.code,
-      payload: buildPayload(it, images ? images[it.code] || null : undefined, batch, labelled.has(it.code)),
+      payload: buildPayload(it, images ? images[it.code] || null : undefined, batch, labelled.has(it.code), items.slice(i + 1).map((x) => x.code)),
     }));
   }
 
@@ -198,7 +225,7 @@
       content += `<p>The latest screenshot, to check that screenshots arrive:</p>${img.html}`;
       Object.assign(message, { body: { contentType: 'html', content }, hostedContents: img.hostedContents });
     }
-    return { source: 'promo-tag-portal', version: 1, test: true, match: 'Daily Alert', message };
+    return { source: 'promo-tag-portal', version: 2, test: true, match: 'Daily Alert', message, content: message.body.content, label: '', later: [] };
   }
 
   PTAE.teams = {

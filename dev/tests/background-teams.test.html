@@ -224,6 +224,54 @@
     ].join(' | '));
   });
 
+  /**
+   * What the updated flow does with one request (TEAMS-SETUP.md, step 1, actions d to f): reply under the
+   * newest post containing `match`; add `label` when that post holds none of the `later` tags.
+   */
+  function updatedFlow(posts, body) {
+    const found = posts.filter((p) => JSON.stringify(p).includes(body.match)).sort((a, b) => (a.createdDateTime < b.createdDateTime ? -1 : 1));
+    const target = found.length ? found[found.length - 1] : null;
+    const laterHere = (body.later || []).filter((m) => (target ? JSON.stringify(target) : '').includes(m));
+    const content = (body.content != null ? body.content : body.message.body.content) + (laterHere.length ? '' : body.label || '');
+    return { thread: target ? target.id : 'new post', content, hostedContents: body.message.hostedContents };
+  }
+
+  test('updated flow: "Run by" once, under the last reply of each card, even when alert times mislead', async () => {
+    hookStatus = (body) => (body.match === '1114 ||' ? 500 : 202);
+    // The run of 27 Nov: two cards; the archive's times put 1117 in a minute of its own and 1116 with card A.
+    await prepare({ operator: 'watsons', screenshots: false, outcomes: [
+      ['1117', '$29 OFF $152', 'success', { oldDesc: 'Buy 2 Save $5' }],
+      ['1116', '$18 OFF $102', 'success', { oldDesc: 'BUY 3 GET $12 OFF' }],
+      ['1115', '$50 OFF $242', 'success', { oldDesc: 'BUY 2 GET $5 OFF' }],
+      ['1114', '$35 OFF $182', 'success', { oldDesc: 'BUY 3 GET 12% OFF' }],
+      ['1113', '$67 OFF $302', 'success', { oldDesc: 'BUY 2 GET 5%OFF' }],
+    ] });
+    const times = ['2026-11-27T11:55:01', '2026-11-27T11:54:58', '2026-11-27T11:54:20', '2026-11-27T11:54:20', '2026-11-27T11:54:20'];
+    await chrome.storage.session.set({ batch: Object.assign(store.session.batch, {
+      items: store.session.batch.items.map((it, i) => Object.assign(it, { alertAt: times[i] })),
+    }) });
+    const card = (id, at, codes) => ({ id, createdDateTime: at, attachments: [{ content: JSON.stringify({ body: codes.map((c) => ({ text: `${c} || new value` })) }) }] });
+    const channel = [card('A', '2026-11-27T03:54:40Z', ['1113', '1114', '1115']), card('B', '2026-11-27T03:59:02Z', ['1116', '1117']), card('C', '2026-11-27T04:30:00Z', ['MT'])];
+    await completeBatch();
+    assertEqual((await settled()).status, 'failed', 'the flow refuses 1114 once');
+    hookStatus = 202;
+    await handleUi({ type: 'UI_TEAMS_RETRY' }, SENDER);
+    const accepted = calls.hooks.filter((h) => h.body.match !== '1114 ||' || h !== calls.hooks.find((x) => x.body.match === '1114 ||'));
+    const threads = {};
+    accepted.forEach((h) => {
+      const r = updatedFlow(channel, h.body);
+      (threads[r.thread] = threads[r.thread] || []).push(`${h.body.match.split(' ')[0]}${/Run by watsons/.test(r.content) ? ' + Run by' : ''}`);
+    });
+    assertEqual(JSON.stringify(threads), JSON.stringify({ B: ['1117', '1116 + Run by'], A: ['1115', '1114', '1113 + Run by'] }));
+    const first = calls.hooks[0].body;
+    assertEqual(first.content, '<p><b>1117</b>&emsp;Buy 2 Save $5 → $29 OFF $152 ✅</p>', 'content: the reply without the line');
+    assertEqual(first.label, '<p>Run by watsons via Promo Tag Portal · 22 Oct 2026, 15:08</p>');
+    assertEqual(first.later.join(','), '1116 ||,1115 ||,1114 ||,1113 ||');
+    assert(/Run by/.test(first.message.body.content), 'message: the old guess (1117 alone in its minute), for a flow not updated yet');
+    // A flow that is not updated posts `message`: the line repeats as before, nothing is lost.
+    assertEqual(calls.hooks.filter((h) => /Run by/.test(h.body.message.body.content)).length >= 2, true);
+  });
+
   test('test button: the test reply carries the newest screenshot, to show that images arrive', async () => {
     hookStatus = 202;
     const b = await prepare({ outcomes: [['963', 'A', 'success', { oldDesc: 'B' }]] });
